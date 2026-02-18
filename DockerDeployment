@@ -1,0 +1,186 @@
+Deploying Docker using Jenkins Pipeline
+Original script
+pipeline
+{
+    agent any
+    stages
+    {
+        stage('Checkout')
+        {
+            steps
+            {
+               git branch: 'main',
+                   url: 'https://github.com/sonyvinny77/FormFillApp.git'
+            }
+        }
+        stage('BuildWar')
+        {
+            steps
+            {
+                sh 'mvn clean package'
+            }
+        }  
+        stage('Prepare Docker Context') 
+        {
+            steps 
+            {
+                sh '''
+                    mkdir -p docker
+                    cp webapp/target/*.war docker/webapp.war
+                    cp Dockerfile docker/
+                '''
+            }
+        }
+        stage('Build Docker Image')
+        {
+            steps
+            {
+                sh 'docker build -t regapp:v1 docker'
+            }
+        }
+        stage('Deploy Container')
+        {
+            steps
+            {
+                sh '''docker stop registerapp || true
+                      docker rm registerapp || true
+                      docker run -d --name registerapp -p 8087:8080 regapp:v1
+                   '''      
+            }
+        }
+    }
+}
+
+In the first step we clone the git repo from github
+
+WAR file is built by maven during the package phase where it compiles java code and copies web resources and bundles
+them into a deployable archieve using WAR packaging defined in pom.xml
+
+your war file is built by maven which looks at pom.xml,web resources,java source files and then 
+creates a war file
+
+Docker cant see files outside its build context
+Docker can access only
+ files which are inside its folder 
+this is security and design rule of docker
+
+DOCKER BUILD CONTEXT:
+Think of it like bag
+You tell docker, here is the bag use only what is inside it
+Docker zips this folder and sends it to docker daemon
+Dockerfile can copy only files inside the bag
+
+In Dockerfile
+From tomcat:latest
+Copy docker/webapp.war  /usr/local/tomcat/webapps
+
+In Pipeline
+cp webapp/target/*.war  docker/webapp.war
+
+
+**********************************************************************************
+
+SHARED LIBRARY FOR ABOVE SCRIPT:
+First create a repo then folder and file 
+For Example---
+REPO NAME: sharedlib
+FOLDER: vars
+FILE: cicd extension should be groovy
+
+NAME: sharedlib/vars/cicd.groovy
+
+def gitDownload(repo)
+{
+  git "https://github.com/IntelliqDevops/${repo}.git"
+} 
+def buildArtifact()
+{
+  sh 'mvn package'
+} 
+def prepareDockerContext() 
+{
+    sh '''
+        mkdir -p docker
+        cp webapp/target/webapp.war docker/webapp.war
+        cat <<EOF > docker/Dockerfile
+FROM tomcat:10
+COPY webapp.war /usr/local/tomcat/webapps/
+EXPOSE 8080
+EOF
+    '''
+}
+def buildDockerImage(imageName) 
+{
+    sh "docker build -t ${imageName} docker"
+}
+def runDockerContainer(containerName, imageName) 
+{
+    sh """
+        docker rm -f ${containerName} || true
+        docker run -d -p 8081:8080 --name ${containerName} ${imageName}
+    """
+}
+
+
+
+
+****************************************************************************
+DECLARATIVE PIPELINE FOR SHARED LIBRARY
+@Library('mylibrary')_
+pipeline
+{
+    agent any
+    stages
+    {
+        stage('Download')
+        {
+            steps
+            {
+                script
+                {
+                    cicd.gitDownload("maven")
+                }
+            }
+        }
+        stage('Build')
+        {
+            steps
+            {
+                script
+                {
+                    cicd.buildArtifact()
+                }
+            }
+        }
+        stage('Prepare Docker Context') 
+        {
+            steps 
+            {
+                script 
+                {
+                    cicd.prepareDockerContext()
+                }
+            }
+        }
+        stage('Build Docker Image') 
+        {
+            steps 
+            {
+                script 
+                {
+                    cicd.buildDockerImage("regapp:v1")
+                }
+            }
+        }
+        stage('Deploy') 
+        {
+            steps 
+            {
+                script 
+                {
+                    cicd.runDockerContainer("regapp-container", "regapp:v1")
+                }
+            }
+        }
+    }
+} 
