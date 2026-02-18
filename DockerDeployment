@@ -1,4 +1,13 @@
 Deploying Docker using Jenkins Pipeline
+CREATE EC2 SERVER INSTALL GIT JAVA MAVEN JENKINS DOCKER
+GIVE PERMISSIONS TO RUN DOCKER COMMANDS IN JENKINS
+sudo su - jenkins
+sudo usermod -aG docker jenkins
+systemctl restart jenkins
+exit
+sudo su - jenkins
+verify by running docker commands (docker ps)
+
 Original script
 pipeline
 {
@@ -125,6 +134,13 @@ def runDockerContainer(containerName, imageName)
 
 
 ****************************************************************************
+
+NOW WE NEED TO CONFIGURE SHAREDLIBRARY DETAILS IN THE JENKINS DASHBOARD
+MANAGEJENKINS----SYSTEM-----GLOBAL TRUSTED PIPELINE FOR LIBRARIES-----NAME:mylibrary(example)------
+DEFAULT VERSION: DEPENDING UPON SHARED LIBRARY REPO(MAIN/MASTER)BRANCH
+GIT-PROJECT REPOSITORY: PASTE THE URL OF SHARED LIBRARY-------SAVE
+
+
 DECLARATIVE PIPELINE FOR SHARED LIBRARY
 @Library('mylibrary')_
 pipeline
