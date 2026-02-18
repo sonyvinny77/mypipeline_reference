@@ -1,4 +1,14 @@
 JENKINS PIPELINE SCRIPT FOR DEPLOYING IN DEV AND PROD ENVIRONMENT
+FIRST WE NEED TO CREATE 3 EC2 SERVERS
+JENKINS_SERVER----JAVA,GIT,MAVEN,JENKINS,DOCKER(GIVE PERMISSIONSFOR JENKINS TO RUN DOCKER COMMANDS)
+BEING AS JENKINS USER-----sudo su - jenkins------sudo usermod -aG docker jenkins----sudo systemctl restart jenkins
+exit---sudo su - jenkins verify by running any docker command (docker ps)
+
+IN DEV AND PROD SERVERS INSTALL DOCKER 
+NOW WE NEED TO GIVE SSH CONFIGURATION BETWEEN JENKINS--DEV--PROD 
+IN JENKINS SERVER--------ssh-keygen------copy the public key 
+CONNECT TO DEV AND PROD SERVERS------cd .ssh-------vi authorized_keys------paste the public key without disturbing previous code init.
+
 
 pipeline {
     agent any
@@ -19,7 +29,7 @@ pipeline {
 
         stage('Build Maven') {
             steps {
-                sh 'mvn clean package'
+                sh 'mvn clean package'           #this builds a war file
             }
         }
 
@@ -83,7 +93,81 @@ EOF
 ******************************************************************************************************
 
 SHARED LIBRARY SCRIPT FOR ABOVE PIPELINE:
+CREATE A REPO FOLDER AND FILE
+FOR EXAMPLE---
+REPO: sharedlib
+FOLDER: vars
+FILE: build.groovy
 
+def call() 
+{
+    stage('Checkout') 
+  {
+        git 'https://github.com/sonyvinny77/maven.git'
+  }
+
+    stage('Build Maven') 
+  {
+        sh 'mvn clean package'
+  }
+}
+
+def call(imageName) {
+    stage('Build Docker Image') {
+        sh """
+cat <<EOF > Dockerfile
+FROM tomcat:9
+COPY webapp/target/webapp.war /usr/local/tomcat/webapps/
+EXPOSE 8080
+EOF
+
+docker build -t ${imageName}:${env.BUILD_NUMBER} .
+docker tag ${imageName}:${env.BUILD_NUMBER} ${imageName}:latest
+"""
+    }
+
+    stage('Push Docker Image') {
+        sh """
+docker push ${imageName}:${env.BUILD_NUMBER}
+docker push ${imageName}:latest
+"""
+    }
+}
+
+def call(imageName, devServer) {
+    stage('Deploy to DEV') {
+        sh """
+ssh -o StrictHostKeyChecking=no ${devServer} '
+docker pull ${imageName}:latest
+docker stop dev-container || true
+docker rm dev-container || true
+docker run -d -p 8081:8080 --name dev-container ${imageName}:latest
+'
+"""
+    }
+}
+
+def call(imageName, prodServer) {
+    stage('Deploy to PROD') {
+        timeout(time: 2, unit: 'MINUTES') {
+            sh """
+ssh -o StrictHostKeyChecking=no ${prodServer} '
+docker pull ${imageName}:latest
+docker stop prod-container || true
+docker rm prod-container || true
+docker run -d -p 8082:8080 --name prod-container ${imageName}:latest
+'
+"""
+        }
+    }
+}
+***********************************************************************************
+NOW WE NEED TO CONFIGURE SHAREDLIBRARY DETAILS IN THE JENKINS DASHBOARD
+MANAGEJENKINS----SYSTEM-----GLOBAL TRUSTED PIPELINE FOR LIBRARIES-----NAME:mysharedlibrary(example)------
+DEFAULT VERSION: DEPENDING UPON SHARED LIBRARY REPO(MAIN/MASTER)BRANCH
+GIT-PROJECT REPOSITORY: PASTE THE URL OF SHARED LIBRARY-------SAVE
+
+DECLARATIVE PIPELINE FOR SHARED LIBRARY IN JENKINS JOB
 @Library('mysharedlibrary') _
 
 pipeline {
@@ -91,8 +175,8 @@ pipeline {
 
     environment {
         IMAGE_NAME = "sony9014/regapp"
-        DEV_SERVER  = "ubuntu@44.206.233.83"
-        PROD_SERVER = "ubuntu@44.201.186.253"
+        DEV_SERVER  = "ubuntu@<DEV_PUBLIC-IP>"
+        PROD_SERVER = "ubuntu@<PROD_PUBLIC_IP>"
     }
 
     stages {
