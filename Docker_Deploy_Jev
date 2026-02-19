@@ -1,0 +1,123 @@
+SHARED LIBRARY (library1/vars/lib.groovy)
+CREATE EC2 SERVER INSTALL GIT JAVA MAVEN JENKINS DOCKER
+GIVE PERMISSIONS TO RUN DOCKER COMMANDS IN JENKINS
+sudo su - jenkins
+sudo usermod -aG docker jenkins
+systemctl restart jenkins
+exit
+sudo su - jenkins
+verify by running docker commands (docker ps)
+
+
+  **********************************************************************************
+def gitDownload(repo)
+{
+  git branch: 'main', url: "https://github.com/jeevana1409/${repo}.git"
+
+}
+def build()
+{
+  sh 'mvn package'
+}
+def dockerContext() 
+{
+    sh '''
+mkdir -p docker
+cp webapp/target/webapp.war docker/webapp.war
+cat > docker/Dockerfile <<EOF
+FROM tomcat:10
+COPY webapp.war /usr/local/tomcat/webapps/
+EXPOSE 8080
+EOF
+'''
+}
+def dockerBuild(imageName)
+{ 
+    sh "docker build -t ${imageName} docker"
+}
+def dockerContainer(containerName, imageName)
+{
+  sh """
+     docker rm -f ${containerName} || true
+     docker run -d  -p 8081:8080 --name ${containerName} ${imageName} 
+     """
+}
+
+*******************************************************************************************************
+  NOW WE NEED TO CONFIGURE SHAREDLIBRARY DETAILS IN THE JENKINS DASHBOARD
+MANAGEJENKINS----SYSTEM-----GLOBAL TRUSTED PIPELINE FOR LIBRARIES-----NAME:library(example)------
+DEFAULT VERSION: DEPENDING UPON SHARED LIBRARY REPO(MAIN/MASTER)BRANCH
+GIT-PROJECT REPOSITORY: PASTE THE URL OF SHARED LIBRARY-------SAVE
+**************************************************************************************************************
+
+  @Library('library') _
+pipeline 
+{
+    agent any
+    stages
+    {
+        stage('Download')
+        {
+            steps
+            {
+                script
+                {
+                    lib.gitDownload("FormFillApp")
+                }
+            }
+        }
+        stage('build')
+        {
+            steps
+            {
+                script
+                {
+                    lib.build()
+                }
+            }
+        }
+        stage('imageCreation')
+        {
+            steps
+            {
+                script
+                {
+                    lib.dockerContext()
+                }
+            }
+        }
+        stage('image')
+        {
+            steps
+            {
+                script
+                {
+                    lib.dockerBuild("regapp")
+                }
+            }
+        }
+        stage('container')
+        {
+            steps
+            {
+                script
+                {
+                    lib.dockerContainer("regapp-container", "regapp")
+                }
+            }
+        }
+    }
+}
+
+
+
+  
+
+
+
+
+
+
+
+
+
