@@ -4,7 +4,7 @@ JENKINS_SERVER----JAVA,GIT,MAVEN,JENKINS,DOCKER(GIVE PERMISSIONSFOR JENKINS TO R
 BEING AS JENKINS USER-----sudo su - jenkins------sudo usermod -aG docker jenkins----sudo systemctl restart jenkins
 exit---sudo su - jenkins verify by running any docker command (docker ps)
 
-IN DEV AND PROD SERVERS INSTALL DOCKER 
+IN DEV AND PROD SERVERS-----IN SECURITY GROUP ASSIGN SSH AND HTTP PORTS----INSTALL DOCKER 
 NOW WE NEED TO GIVE SSH CONFIGURATION BETWEEN JENKINS--DEV--PROD 
 IN JENKINS SERVER--------ssh-keygen------copy the public key 
 CONNECT TO DEV AND PROD SERVERS------cd .ssh-------vi authorized_keys------paste the public key without disturbing previous code init.
