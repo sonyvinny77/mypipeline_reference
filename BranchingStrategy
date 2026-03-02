@@ -1,0 +1,135 @@
+For one repo create 3 branches main,dev,qa respectively.
+When you implement new feature you should create a feature branch from dev branch 
+After completion of implementationwhen you ush the code to the feature branch your sonarqube quality
+gate stage should executed then once the quality gate is succeded there should be a stage which 
+can create merge request to dev branch .
+When u create a merge request MR should be approved,without approvals merge should not be performed 
+it should block.
+Once we create merge request there should be a initialization stage ran which should check for tagging
+if tagging in versioning is properly handled then build,test,deploy should run.
+And deploy should happen to the dev server
+****************************************************************************************
+PRACTICAL:
+PRE-Requisties:
+* Launch an EC2 instance name it as Jenkins-Server - Where java,git,maven jenkins should be installed
+* Jenkins-plugins: Sonarqube-scanner, Git-hub integration plugin, Git-hub branch source plugin
+* Launch another instance name it as Sonar-Server - Where Docker should be installed
+We ran sonarqube by creating a docker container: 
+>> docker run -d --name sonarqube -p 9000:9000 sonarqube-community
+By giving the public ip of sonar server we can access it through browser
+>> http://<sonar-public-ip>:9000
+Credentials by default it will be username:admin password:admin later change the default password
+**IN SONAR-SERVER (browser) **
+1. CREATE A PROJECT:
+   projects >> create project >> project name: jobx >> projectkey: jobx-key >> save
+2. GENERATE-TOKEN:
+   go to my account >> security >> Token-name: sonar-token >> generate 
+3. CREATING WEBHOOK 
+  administartion >> configuration >> webhook >> click on create >> name: sonar-hook >> 
+  URL: http://jenkinspublicIP:8080/sonarqube-webhook/ >> save 
+
+
+
+******************************************************************************************
+
+CONFIGURATION OF CREDENTIALS IN JENKINS SERVER
+ With the help of these credentials jenkins server communicate with those respective servers
+
+1. Manage jenkins > system > add sonarqube > name: sonar-server > URL: http://sonar-serverprivate ip:9000
+   credentials > add secret text > copy paste the sonar-token > ID : sonar-token (should match the token-name > save
+2. Manage jenkins > credentials > global > add credentials > kind: username ith passord, 
+   > username: jeevana1409 > passord: copy paste git-hub token > Id: github-cred > save 
+   (This is used for git clonning)
+3. Manage jenkins > credentials > global > add credentials > kind: secret text (copy paste github token)
+   Id: github-API-cred (this is used for Pull Request)
+
+***********************************************************************************************
+
+CONFIGURING PATH OF THE TOOLS IN JENKINS-SERVER
+
+1. Manage jenkins > global tool configuration > sonarqube-scanner > add > name: sonar-scanner > path: paste the path of sonar-scanner > save
+2. Manage jenkins > global tool configuration > add JDK > name: JDK-21, path: /usr/lib/jvm/java-21-amazon_corretto.x86_84 > save
+3. Manage jenkins > global tool configuration > add maven > name: maven > path: /opt/maven > save 
+4. Manage jenkins > global tool configuration > add git > name: git , path: /opt/git > save
+
+*********************************************************************************************
+IN GIT-HUB
+# create a repo eg: app (repo-name)
+# create a Jenkinsfile - place where we write actual jenkins-pipeline (in main)
+# create 3 branches QA,Dev,Create a feature branch-xyz(from dev)
+Jenkinsfile- pipeline
+pipeline {
+    agent any
+
+    tools {
+        maven 'Maven'
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build & SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('sonar-server') {
+                    sh 'mvn clean verify sonar:sonar'
+                }
+            }
+        }
+
+        stage("Quality Gate") {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('Create Pull Request to Dev') {
+            when {
+                not {
+                    branch 'dev'
+                }
+            }
+            steps {
+                sh 'echo Branch is: $BRANCH_NAME'   
+
+                withCredentials([string(credentialsId: <'secret-token>', variable: 'GITHUB_TOKEN')]) {
+                    sh """
+                        curl -X POST https://api.github.com/repos/jeevana1409/app/pulls \
+                        -H "Authorization: token \$GITHUB_TOKEN" \
+                        -H "Accept: application/vnd.github.v3+json" \
+                        -d '{
+                            "title": "Auto PR: ${env.GIT_BRANCH} → dev",
+                            "head": "feature-branch-xyz",
+                            "base": "dev",
+                            "body": "Automatically created after successful SonarQube Quality Gate."
+                        }'
+                    """
+                }
+            }
+        }
+
+    }
+}
+
+*************************************************************************************************
+IN JENKINS-SERVER (virtual machine)
+> clone the repo (app) using git clone command 
+cd app 
+git checkout featurebranch-xyz
+vi index.jsp 
+edit the code > git add . > git commit > git push origin faturebranch_xyz
+******************************************************************************************
+IN JENKINS (browser)
+New Item > Name: BranchesJob > Select multibranch pipeline > ok
+Branch Source: Select Github----Credentials: Give Secrettoken----All Branches----Save
+Scan MultiBranch Pieline Now [This will automatically scan the repo create job for each branch
+No need of creating multiple jobs manually]
+
+
+
