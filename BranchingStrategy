@@ -1,4 +1,4 @@
-For one repo create 3 branches main,dev,qa respectively.
+Question: For one repo create 3 branches main,dev,qa respectively.
 When you implement new feature you should create a feature branch from dev branch 
 After completion of implementationwhen you ush the code to the feature branch your sonarqube quality
 gate stage should executed then once the quality gate is succeded there should be a stage which 
