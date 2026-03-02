@@ -1,4 +1,5 @@
-SHARED LIBRARY (library1/vars/lib.groovy)
+COMPLETE PROCEDURE FOR DOCKER DEPLOYMENT USING SHARED LIBRARY
+
 CREATE EC2 SERVER INSTALL GIT JAVA MAVEN JENKINS DOCKER
 GIVE PERMISSIONS TO RUN DOCKER COMMANDS IN JENKINS
 sudo su - jenkins
@@ -10,6 +11,9 @@ verify by running docker commands (docker ps)
 
 
   **********************************************************************************
+IN GITHUB
+create a repo SHARED LIBRARY NAME :(library1/vars/lib.groovy)
+Pipeline
 def gitDownload(repo)
 {
   git branch: 'main', url: "https://github.com/jeevana1409/${repo}.git"
