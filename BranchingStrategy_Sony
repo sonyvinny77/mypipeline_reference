@@ -1,7 +1,7 @@
 Question: For one repo create 3 branches dev,qa,prod respectively.
 When you implement new feature you should create a feature branch from dev branch 
 After completion of implementation when you push the code to the feature branch your sonarqube quality
-gate stage should be executed then once the quality gate is succeded there should be a stage which 
+gate stage should be executed then once the quality gate is succeeded there should be a stage which 
 can create merge request to dev branch .
 When u create a merge request MR should be approved,without approvals merge should not be performed 
 it should block.
