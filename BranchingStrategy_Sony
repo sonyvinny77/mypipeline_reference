@@ -1,0 +1,296 @@
+Question: For one repo create 3 branches dev,qa,prod respectively.
+When you implement new feature you should create a feature branch from dev branch 
+After completion of implementation when you push the code to the feature branch your sonarqube quality
+gate stage should be executed then once the quality gate is succeded there should be a stage which 
+can create merge request to dev branch .
+When u create a merge request MR should be approved,without approvals merge should not be performed 
+it should block.
+Once we create merge request there should be a initialization stage ran which should check for tagging
+if tagging in versioning is properly handled then build,test,deploy should run.
+And deploy should happen to the dev server
+****************************************************************************************
+PRE-REQUISTIES:
+* Launch an EC2 instance name it as Jenkins-Server - Where java,git,maven jenkins should be installed.
+* Jenkins-plugins: Sonarqube-scanner, Git-hub integration plugin, Git-hub branch source plugin SHOULD BE INSTALLED FROM MANAGE JENKINS.
+* Launch another instance name it as Sonar-Server - Where Docker should be installed
+We ran sonarqube by creating a docker container: 
+>> docker run -d --name sonarqube -p 9000:9000 sonarqube-community             #DEFAULT PORT OF SONARQUBE:9000
+By giving the public ip of sonar server we can access it through browser
+>> http://<sonar-public-ip>:9000
+Credentials by default it will be username:admin password:admin later change the default password
+**IN SONAR-SERVER (browser) **
+1. CREATE A PROJECT:
+   projects >> create project >> project name: myproject >> projectkey: myproject-key >> save
+2. GENERATE-TOKEN:
+   go to my account >> security >> Token-name: sonar-token >> generate 
+3. CREATING WEBHOOK 
+  administartion >> configuration >> webhook >> click on create >> name: sonar-hook >> 
+  URL: http://jenkinspublicIP:8080/sonarqube-webhook/ >> save 
+
+******************************************************************************************
+CONFIGURATION OF CREDENTIALS IN JENKINS SERVER
+ With the help of these credentials jenkins server communicate with those respective servers
+
+1. Manage jenkins > system > add sonarqube > name: sonar-server > URL: http://sonar-serverprivate ip:9000 > save
+   credentials > add secret text > copy paste the sonar-token > ID : sonar-token (should match the token-name > save
+2. Manage jenkins > credentials > global > add credentials > kind: username with password, 
+   > username: sonyvinny77 > passord: copy paste git-hub token > Id: github-cred > save 
+   (This is used for git cloning)
+3. Manage jenkins > credentials > global > add credentials > kind: secret text (copy paste github token)
+   Id: github-API-cred (this is used for Pull Request)
+
+***********************************************************************************************
+CONFIGURING PATH OF THE TOOLS IN JENKINS-SERVER
+
+ Manage jenkins > global tool configuration > 
+                 add sonarqube-scanner > name: sonar-scanner > path: paste the path of sonar-scanner > save
+                 add JDK > name: JDK-21, path: /usr/lib/jvm/java-21-amazon_corretto.x86_84 > save
+                 add maven > name: maven > path: /opt/maven > save 
+                 add git > name: git > path: /opt/git > save
+
+*********************************************************************************************
+IN GIT-HUB
+# create a repo my-jsp (repo-name)
+# create a Jenkinsfile - place where we write actual jenkins-pipeline (in main)
+# create 3 branches QA,Dev,Create a feature/login branch(from Dev)
+Jenkinsfile- pipeline [feature/login branch]
+pipeline {
+    agent any
+
+    tools {
+        maven 'Maven'
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build & SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('SonarServer') {
+                    sh 'mvn clean verify sonar:sonar'
+                }
+            }
+        }
+
+        stage("Quality Gate") {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true                  # WHEN THIS QUALITY GATE IS SUCCEDED THEN ONLY IT CREATES 
+                }                                                             PULL REQUEST TO DEV.
+            }
+        }
+
+        stage('Create Pull Request to Dev') {
+            when {
+                not {
+                    branch 'dev'
+                }
+            }
+            steps {
+                script {
+                    def branchName = env.BRANCH_NAME
+                    echo "Creating PR from ${branchName} to dev"
+
+                    withCredentials([string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN')]) {
+                        sh """
+                        curl -X POST https://api.github.com/repos/sonyvinny77/my-jsp/pulls \
+                        -H "Authorization: token \$GITHUB_TOKEN" \
+                        -H "Accept: application/vnd.github+json" \
+                        -d '{
+                          "title": "Auto PR: ${branchName} → dev",
+                          "head": "${branchName}",
+                          "base": "dev",
+                          "body": "Created automatically by Jenkins."
+                        }'
+                        """
+                    }
+                }
+            }
+        }
+
+    }
+}
+*************************************************************************************************
+CONNECT TO JENKINS-SERVER VIA GITBASH
+> Clone the repo git clone "http://github.com/sonyvinny77/my-jsp.git"
+cd my-jsp
+git checkout feature/login
+vi index.jsp 
+edit the code > git add . > git commit > git push origin feature/login
+******************************************************************************************
+IN JENKINS DASHBOARD CREATE A MULTIBRANCH PIPELINE JOB
+New Item > Name: BranchesJob > Select multibranch pipeline > ok
+Branch Source: Select Github----Credentials: Give Secret token----All Branches----Save
+Scan MultiBranch Pieline Now [This will automatically scan the repo create job for each branch
+No need of creating multiple jobs manually]
+
+When we scan it will build the feature/login branch it runs all the stages 
+      Pulls everything from scm                     
+      Creates a WAR file
+      Sonar will analyse the code, via webhook its connected to jenkins sends the code quality to jenkins it runs the next stage 
+      When quality gate stage is succeded it creates pull request to Dev, here merge should happen by giving Branch Protection Rules
+                            Without approval → Merge blocked
+                            With approval → Merge allowed
+            Branch Protection Rules: 1.Require a pull request before merging
+                                     2.Dismiss stale pull request approvals when new commits are pushed
+                                     3.Require status checks to pass before merging
+                                     4.Require branches to be up to date before merging(status checks)
+                                            search for jenkins select it.  Save
+When MR is created jenkinsfile will run from Dev branch starting from initialization stage here (Version Check + Tag Validation)will be done
+Again it will build maven WAR file it will test and create a customized docker image by using dockerfile and creates a docker container in hub.
+
+DEV BRANCH JENKINSFILE:
+
+pipeline {
+    agent any
+
+    tools {
+        maven 'Maven'
+    }
+
+    environment {
+        DOCKER_IMAGE = "sony9014/myapp"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Initialization - Auto Version Increment') {
+    steps {
+        script {
+            sh "git fetch --tags"
+
+            def latestTag = sh(
+                script: "git describe --tags --abbrev=0",
+                returnStdout: true
+            ).trim()
+
+            echo "Latest Tag: ${latestTag}"
+
+            def versionNumber = latestTag.replace("v", "").tokenize(".")
+            def major = versionNumber[0]
+            def minor = versionNumber[1]
+            def patch = versionNumber[2].toInteger() + 1
+
+            def newTag = "v${major}.${minor}.${patch}"
+            echo "New Version: ${newTag}"
+            env.APP_VERSION = newTag
+            sh "git tag ${newTag}"
+
+            withCredentials([usernamePassword(
+                credentialsId: 'github-api-creds',
+                usernameVariable: 'GIT_USERNAME',
+                passwordVariable: 'GIT_PASSWORD'
+            )]) {
+
+                sh """
+                git config user.name "${GIT_USERNAME}"
+                git config user.email "${GIT_USERNAME}@users.noreply.github.com"
+                git push https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/sonyvinny77/my-jsp.git ${newTag}
+                """
+            }
+        }
+    }
+}
+
+        stage('Build') {
+            steps {
+                sh "mvn clean package"
+            }
+        }
+
+        stage('Test') {
+            steps {
+                sh "mvn test"
+            }
+        }
+
+        stage('Docker Build & Push') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+
+                        sh """
+                        echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
+                        docker build --no-cache -t ${DOCKER_IMAGE}:${APP_VERSION} .
+                        docker push ${DOCKER_IMAGE}:${APP_VERSION}
+                        docker logout
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Dev Server') {
+            steps {
+                script {
+                    sshagent(credentials: ['docker-server-ssh']) {
+                        sh """
+                        ssh -o StrictHostKeyChecking=no ec2-user@<Dev-Server_PublicIP> "
+                            docker pull ${DOCKER_IMAGE}:${APP_VERSION} &&
+                            docker stop app || true &&
+                            docker rm app || true &&
+                            docker run -d -p 8080:8080 --restart=always --name app ${DOCKER_IMAGE}:${APP_VERSION}
+                        "
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ DEV Deployment Successful!"
+        }
+        failure {
+            echo "❌ DEV Deployment Failed!"
+        }
+    }
+}
+
+This will create a docker container in docker registry(hub.docker.com)
+We can verify by logged in into dockerhub container will be running and can check tags
+Connect to DevServer use the command ------- docker ps -a container will be running 
+
+
+SOMETIMES INDEX.JSP FILE CONTENT MAY DIFFER IN GITHUB AND IN LOCAL WE CAN CHECK IT BY USING FOLLOWING STEPS:
+RUN INTERACTIVE TERMINAL OF CONTAINER IN BASH SHELL
+COMMANDS:
+docker exec -it app bash
+cd /usr/local/tomcat/webapps/webapp       # LOCATION OF MY INDEX.JSP FILE
+vi index.jsp    CHECK THE CONTENT
+
+CONNECT TO JENKINS SERVER:
+cd my-jsp
+cd webapp
+vi index.jsp
+CHECK THE CONTENT MAKE NECESSARY CHANGES  
+git add .
+git commit -m "changes"
+git push origin dev
+git pull origin dev
+
+NOW AGAIN IN DEV SERVER VERIFY THE INDEX.JSP CONTENT
+ACCESS IT FROM BROWSER:
+http://<devserver_publicip>:8080/webapp        # INDEX.JSP CONTENT SHOULD DISPLAY HERE
+
+
+
+
+
+
