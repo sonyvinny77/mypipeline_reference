@@ -306,7 +306,7 @@ pipeline {
         }
 
         stage('Trivy Security Scan') {
-            steps {
+            steps {                                              #This scans your source code for vulnerabilities before building Docker image.
                 sh '''
                 trivy fs --severity HIGH,CRITICAL --exit-code 1 .
                 '''
