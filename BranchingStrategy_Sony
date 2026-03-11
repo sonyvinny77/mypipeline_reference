@@ -142,7 +142,26 @@ When we scan it will build the feature/login branch it runs all the stages
                                      4.Require branches to be up to date before merging(status checks)
                                             search for jenkins select it.  Save
 When MR is created jenkinsfile will run from Dev branch starting from initialization stage here (Version Check + Tag Validation)will be done
-Again it will build maven WAR file it will test and create a customized docker image by using dockerfile and creates a docker container in hub.
+Again it will build maven WAR file it will test and scan the image using Trivy which is a security scan tool and create a customized 
+docker image by using dockerfile and creates a docker container in hub.
+
+STEPS FOR INSTALLING TRIVY IN JENKINS SERVER:
+1.Add Trivy Repository---Run below commands in jenkins server:
+sudo tee /etc/yum.repos.d/trivy.repo <<EOF
+[trivy]
+name=Trivy repository
+baseurl=https://aquasecurity.github.io/trivy-repo/rpm/releases/\$basearch/
+gpgcheck=0
+enabled=1
+EOF
+2.Install Trivy:
+sudo yum install trivy -y
+3. Verify Installation:
+trivy --version
+4. Test Trivy Scan:
+trivy image sony9014/myapp:v1.0.7
+This command will show us the vulnerabilities like (HIGH,MEDIUM,CRITICAL,LOW)
+5. I have added trivy scan stage in jenkinsfile so that it will scan the image 
 
 DEV BRANCH JENKINSFILE:
 
@@ -214,7 +233,133 @@ pipeline {
                 sh "mvn test"
             }
         }
+        pipeline {
+    agent any
 
+    tools {
+        maven 'Maven'
+    }
+
+    environment {
+        DOCKER_IMAGE = "sony9014/myapp"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Initialization - Auto Version Increment') {
+            steps {
+                script {
+
+                    sh "git fetch --tags"
+
+                    def latestTag = sh(
+                        script: "git describe --tags --abbrev=0",
+                        returnStdout: true
+                    ).trim()
+
+                    echo "Latest Tag: ${latestTag}"
+
+                    def versionNumber = latestTag.replace("v", "").tokenize(".")
+                    def major = versionNumber[0]
+                    def minor = versionNumber[1]
+                    def patch = versionNumber[2].toInteger() + 1
+
+                    def newTag = "v${major}.${minor}.${patch}"
+                    echo "New Version: ${newTag}"
+
+                    env.APP_VERSION = newTag
+
+                    sh "git tag ${newTag}"
+
+                    withCredentials([usernamePassword(
+                        credentialsId: 'github-api-creds',
+                        usernameVariable: 'GIT_USERNAME',
+                        passwordVariable: 'GIT_PASSWORD'
+                    )]) {
+
+                        sh """
+                        git config user.name "${GIT_USERNAME}"
+                        git config user.email "${GIT_USERNAME}@users.noreply.github.com"
+                        git push https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/sonyvinny77/my-jsp.git ${newTag}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh "mvn clean package"
+            }
+        }
+
+        stage('Test') {
+            steps {
+                sh "mvn test"
+            }
+        }
+
+        stage('Trivy Security Scan') {
+            steps {
+                sh '''
+                trivy fs --severity HIGH,CRITICAL --exit-code 1 .
+                '''
+            }
+        }
+
+        stage('Docker Build & Push') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+
+                        sh """
+                        echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
+                        docker build --no-cache -t ${DOCKER_IMAGE}:${APP_VERSION} .
+                        docker push ${DOCKER_IMAGE}:${APP_VERSION}
+                        docker logout
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Dev Server') {
+            steps {
+                script {
+                    sshagent(credentials: ['docker-server-ssh']) {
+                        sh """
+                        ssh -o StrictHostKeyChecking=no ec2-user@3.146.221.101 "
+                        docker pull ${DOCKER_IMAGE}:${APP_VERSION} &&
+                        docker stop app || true &&
+                        docker rm app || true &&
+                        docker run -d -p 8080:8080 --restart=always --name app ${DOCKER_IMAGE}:${APP_VERSION}
+                        "
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "DEV Deployment Successful!"
+        }
+        failure {
+            echo "DEV Deployment Failed!"
+        }
+    }
+}
         stage('Docker Build & Push') {
             steps {
                 script {
