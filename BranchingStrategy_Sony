@@ -163,6 +163,49 @@ trivy image sony9014/myapp:v1.0.7
 This command will show us the vulnerabilities like (HIGH,MEDIUM,CRITICAL,LOW)
 5. I have added trivy scan stage in jenkinsfile so that it will scan the image 
 
+STEPS FOR INSTALLING NEXUS:
+CREATE AN EC2 INSTANCE FOR NEXUS WITH SSH PORT 22 AND TCP PORT 8081 FOR ACCESSING THROUGH BROWSER
+ON NEXUS SERVER COMMANDS:
+1. cd /opt
+sudo wget https://download.sonatype.com/nexus/3/latest-unix.tar.gz
+2. EXTRACT sudo tar -xvf latest-unix.tar.gz-----You will get nexus-3.70.0-02 and sonatype-work(ls)
+3. RENAME sudo mv nexus-3.* nexus
+4. START NEXUS GO TO NEXUS DIRECTORY : cd /opt/nexus/bin   START NEXUS : ./nexus start  CHECK STATUS : ./nexus status (should show running)
+5. ACCESS THROUGH BROWSER : http://<NEXUS_PUBLIC_IP>:8081   
+       USERNAME : admin     PASSWORD:  cat /opt/sonatype-work/nexus3/admin.password (FROM NEXUS SERVER COPY PASTE IT IN BROWSER)
+       AFTER LOGIN CHANGE THE PASSWORD
+6. CREATE MAVEN REPOSITORY : 
+Settings → Repositories → Create repository
+Create:
+maven2 (hosted)
+Name : my-maven-releases
+Version policy : Release
+Deployment policy : Allow redeploy 
+CLICK ON CREATE REPOSITORY YOU WILL GET A REPOSITORY URL http://<nexus_private_ip>:8081/repository/my-maven-releases/
+7. CONFIGURE MAVEN settings.xml
+GO TO MAVEN DICRECTORY cd ~/.m2
+vi settings.xml
+<settings>
+ <servers>
+   <server>
+     <id>nexus</id>                          # SHOULD MATCH WITH POM.XML ID FROM DISTRIBUTION MANAGEMENT SECTION
+     <username>admin</username>
+     <password>YOUR_NEXUS_PASSWORD</password>            # NEXUS LOGIN PASSWORD WE SHOULD MENTION.MY PASSWORD IS Nexus@123
+   </server>
+ </servers>
+</settings>  
+8. UPDATE pom.xml [ROOT POM.XML WHICH IS INSIDE OF my-jsp/pom.xml NOT INSIDE OF SERVER FOLDER OR NOT INSIDE OF WEBAPP FOLDER THEY ARE PARENT POM.XML]
+<distributionManagement>
+    <repository>
+        <id>nexus</id>                                                     # SHOULD MATCH WITH SETTINGS.XML ID
+        <name>Nexus</name>                                                       # REPO NAME
+        <url>http://<NEXUS_PRIVATE_IP>:8081/repository/my-maven-releases/</url>   # REPO URL 
+    </repository>
+</distributionManagement>
+9. IN JENSKINSFILE ADD THIS ARTIFACT TO NEXUS STAGE
+10. AFTER THE BUILD IS SUCCESFULL WE CAN VERIFY FROM NEXUS BROWSER
+CLICK ON SEARCH : Type webapp (we can see the artifactory stored with version)
+
 DEV BRANCH JENKINSFILE:
 
 pipeline {
@@ -184,98 +227,27 @@ pipeline {
             }
         }
 
-        stage('Initialization - Auto Version Increment') {
-    steps {
-        script {
-            sh "git fetch --tags"
-
-            def latestTag = sh(
-                script: "git describe --tags --abbrev=0",
-                returnStdout: true
-            ).trim()
-
-            echo "Latest Tag: ${latestTag}"
-
-            def versionNumber = latestTag.replace("v", "").tokenize(".")
-            def major = versionNumber[0]
-            def minor = versionNumber[1]
-            def patch = versionNumber[2].toInteger() + 1
-
-            def newTag = "v${major}.${minor}.${patch}"
-            echo "New Version: ${newTag}"
-            env.APP_VERSION = newTag
-            sh "git tag ${newTag}"
-
-            withCredentials([usernamePassword(
-                credentialsId: 'github-api-creds',
-                usernameVariable: 'GIT_USERNAME',
-                passwordVariable: 'GIT_PASSWORD'
-            )]) {
-
-                sh """
-                git config user.name "${GIT_USERNAME}"
-                git config user.email "${GIT_USERNAME}@users.noreply.github.com"
-                git push https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/sonyvinny77/my-jsp.git ${newTag}
-                """
-            }
-        }
-    }
-}
-
-        stage('Build') {
-            steps {
-                sh "mvn clean package"
-            }
-        }
-
-        stage('Test') {
-            steps {
-                sh "mvn test"
-            }
-        }
-        pipeline {
-    agent any
-
-    tools {
-        maven 'Maven'
-    }
-
-    environment {
-        DOCKER_IMAGE = "sony9014/myapp"
-    }
-
-    stages {
-
-        stage('Checkout') {
-            steps {
-                checkout scm
-            }
-        }
-
-        stage('Initialization - Auto Version Increment') {
+        stage('Auto Version Increment') {
             steps {
                 script {
 
-                    sh "git fetch --tags"
+                    sh 'git fetch --tags'
 
                     def latestTag = sh(
-                        script: "git describe --tags --abbrev=0",
+                        script: "git describe --tags \$(git rev-list --tags --max-count=1) 2>/dev/null || echo v1.0.0",
                         returnStdout: true
                     ).trim()
 
                     echo "Latest Tag: ${latestTag}"
 
-                    def versionNumber = latestTag.replace("v", "").tokenize(".")
-                    def major = versionNumber[0]
-                    def minor = versionNumber[1]
-                    def patch = versionNumber[2].toInteger() + 1
+                    def version = latestTag.replace("v","").tokenize('.')
+                    def major = version[0]
+                    def minor = version[1]
+                    def patch = version[2].toInteger() + 1
 
-                    def newTag = "v${major}.${minor}.${patch}"
-                    echo "New Version: ${newTag}"
+                    env.APP_VERSION = "v${major}.${minor}.${patch}"
 
-                    env.APP_VERSION = newTag
-
-                    sh "git tag ${newTag}"
+                    echo "New Version: ${APP_VERSION}"
 
                     withCredentials([usernamePassword(
                         credentialsId: 'github-api-creds',
@@ -284,38 +256,52 @@ pipeline {
                     )]) {
 
                         sh """
-                        git config user.name "${GIT_USERNAME}"
-                        git config user.email "${GIT_USERNAME}@users.noreply.github.com"
-                        git push https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/sonyvinny77/my-jsp.git ${newTag}
+                        git config user.name "jenkins"
+                        git config user.email "jenkins@local"
+
+                        git tag ${APP_VERSION}
+
+                        git push https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/sonyvinny77/my-jsp.git ${APP_VERSION}
                         """
                     }
                 }
             }
         }
 
-        stage('Build') {
+        stage('Update Maven Version') {
             steps {
-                sh "mvn clean package"
+                sh "mvn versions:set -DnewVersion=${APP_VERSION}"
             }
         }
 
-        stage('Test') {
+        stage('Build WAR') {
+            steps {
+                sh "mvn clean package -DskipTests"
+            }
+        }
+
+        stage('Run Tests') {
             steps {
                 sh "mvn test"
             }
         }
 
-        stage('Trivy Security Scan') {
-            steps {                                              #This scans your source code for vulnerabilities before building Docker image.
-                sh '''
-                trivy fs --severity HIGH,CRITICAL --exit-code 1 .
-                '''
+        stage('Upload Artifact to Nexus') {
+            steps {
+                sh "mvn deploy -DskipTests"
+            }
+        }
+
+        stage('Security Scan') {
+            steps {                                           #This scans your source code for vulnerabilities before building docker image.
+                sh "trivy fs --severity HIGH,CRITICAL --exit-code 1 ."
             }
         }
 
         stage('Docker Build & Push') {
             steps {
                 script {
+
                     withCredentials([usernamePassword(
                         credentialsId: 'dockerhub-creds',
                         usernameVariable: 'DOCKER_USER',
@@ -324,8 +310,11 @@ pipeline {
 
                         sh """
                         echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
-                        docker build --no-cache -t ${DOCKER_IMAGE}:${APP_VERSION} .
+
+                        docker build -t ${DOCKER_IMAGE}:${APP_VERSION} .
+
                         docker push ${DOCKER_IMAGE}:${APP_VERSION}
+
                         docker logout
                         """
                     }
@@ -333,63 +322,41 @@ pipeline {
             }
         }
 
-        stage('Deploy to Dev Server') {
+        stage('Deploy to Dev') {
             steps {
                 script {
+
                     sshagent(credentials: ['docker-server-ssh']) {
+
                         sh """
-                        ssh -o StrictHostKeyChecking=no ec2-user@3.146.221.101 "
+                        ssh -o StrictHostKeyChecking=no ec2-user@<DEV_PUBLIC_IP> "
                         docker pull ${DOCKER_IMAGE}:${APP_VERSION} &&
                         docker stop app || true &&
                         docker rm app || true &&
-                        docker run -d -p 8080:8080 --restart=always --name app ${DOCKER_IMAGE}:${APP_VERSION}
+                        docker run -d -p 8080:8080 --name app ${DOCKER_IMAGE}:${APP_VERSION}
                         "
                         """
                     }
                 }
             }
         }
-    }
 
-    post {
-        success {
-            echo "DEV Deployment Successful!"
-        }
-        failure {
-            echo "DEV Deployment Failed!"
-        }
-    }
-}
-        stage('Docker Build & Push') {
+        stage('Deploy to QA') {
+
             steps {
-                script {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'dockerhub-creds',
-                        usernameVariable: 'DOCKER_USER',
-                        passwordVariable: 'DOCKER_PASS'
-                    )]) {
 
-                        sh """
-                        echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
-                        docker build --no-cache -t ${DOCKER_IMAGE}:${APP_VERSION} .
-                        docker push ${DOCKER_IMAGE}:${APP_VERSION}
-                        docker logout
-                        """
-                    }
-                }
-            }
-        }
+                input message: "Deploy to QA?"
 
-        stage('Deploy to Dev Server') {
-            steps {
                 script {
+
                     sshagent(credentials: ['docker-server-ssh']) {
+
                         sh """
-                        ssh -o StrictHostKeyChecking=no ec2-user@<Dev-Server_PublicIP> "
-                            docker pull ${DOCKER_IMAGE}:${APP_VERSION} &&
-                            docker stop app || true &&
-                            docker rm app || true &&
-                            docker run -d -p 8080:8080 --restart=always --name app ${DOCKER_IMAGE}:${APP_VERSION}
+                        ssh -o StrictHostKeyChecking=no ec2-user@<QA_PUBLIC_IP> "
+                        docker pull ${DOCKER_IMAGE}:${APP_VERSION} &&
+                        docker stop qa-app || true &&
+                        docker rm qa-app || true &&
+                        docker run -d -p 8080:8080 --name qa-app ${DOCKER_IMAGE}:${APP_VERSION}
                         "
                         """
                     }
@@ -400,14 +367,14 @@ pipeline {
 
     post {
         success {
-            echo "✅ DEV Deployment Successful!"
+            echo "✅ Pipeline Completed Successfully"
         }
+
         failure {
-            echo "❌ DEV Deployment Failed!"
+            echo "❌ Pipeline Failed"
         }
     }
 }
-
 This will create a docker container in docker registry(hub.docker.com)
 We can verify by logged in into dockerhub container will be running and can check tags
 Connect to DevServer use the command ------- docker ps -a container will be running 
