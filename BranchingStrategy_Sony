@@ -170,7 +170,7 @@ ON NEXUS SERVER COMMANDS:
 sudo wget https://download.sonatype.com/nexus/3/latest-unix.tar.gz
 2. EXTRACT sudo tar -xvf latest-unix.tar.gz-----You will get nexus-3.70.0-02 and sonatype-work(ls)
 3. RENAME sudo mv nexus-3.* nexus
-4. START NEXUS GO TO NEXUS DIRECTORY : cd /opt/nexus/bin   START NEXUS : ./nexus start  CHECK STATUS : ./nexus status (should show running)
+4. START NEXUS GO TO NEXUS DIRECTORY : cd nexus-3.69.0-02/bin  START NEXUS : ./nexus start  CHECK STATUS : ./nexus status (should show running)
 5. ACCESS THROUGH BROWSER : http://<NEXUS_PUBLIC_IP>:8081   
        USERNAME : admin     PASSWORD:  cat /opt/sonatype-work/nexus3/admin.password (FROM NEXUS SERVER COPY PASTE IT IN BROWSER)
        AFTER LOGIN CHANGE THE PASSWORD
