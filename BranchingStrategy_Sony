@@ -14,6 +14,13 @@ PRE-REQUISTIES:
 * Jenkins-plugins: Sonarqube-scanner, Git-hub integration plugin, Git-hub branch source plugin SHOULD BE INSTALLED FROM MANAGE JENKINS.
 * Launch another instance name it as Sonar-Server - Where Docker should be installed
 We ran sonarqube by creating a docker container: 
+Commands to install docker:
+sudo yum install docker -y
+sudo systemctl enable docker
+sudo systemctl start docker
+sudo usermod -aG docker ec2-user
+newgrp docker
+docker ps
 >> docker run -d --name sonarqube -p 9000:9000 sonarqube-community             #DEFAULT PORT OF SONARQUBE:9000
 By giving the public ip of sonar server we can access it through browser
 >> http://<sonar-public-ip>:9000
@@ -37,7 +44,7 @@ CONFIGURATION OF CREDENTIALS IN JENKINS SERVER
    > username: sonyvinny77 > passord: copy paste git-hub token > Id: github-cred > save 
    (This is used for git cloning)
 3. Manage jenkins > credentials > global > add credentials > kind: secret text (copy paste github token)
-   Id: github-API-cred (this is used for Pull Request)
+   Id: github-api-creds (this is used for Pull Request)
 
 ***********************************************************************************************
 CONFIGURING PATH OF THE TOOLS IN JENKINS-SERVER
@@ -344,25 +351,6 @@ pipeline {
         stage('Deploy to QA') {
 
             steps {
-
-                input message: "Deploy to QA?"
-
-                script {
-
-                    sshagent(credentials: ['docker-server-ssh']) {
-
-                        sh """
-                        ssh -o StrictHostKeyChecking=no ec2-user@<QA_PUBLIC_IP> "
-                        docker pull ${DOCKER_IMAGE}:${APP_VERSION} &&
-                        docker stop qa-app || true &&
-                        docker rm qa-app || true &&
-                        docker run -d -p 8080:8080 --name qa-app ${DOCKER_IMAGE}:${APP_VERSION}
-                        "
-                        """
-                    }
-                }
-            }
-        }
     }
 
     post {
