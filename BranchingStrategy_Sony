@@ -385,7 +385,73 @@ NOW AGAIN IN DEV SERVER VERIFY THE INDEX.JSP CONTENT
 ACCESS IT FROM BROWSER:
 http://<devserver_publicip>:8080/webapp        # INDEX.JSP CONTENT SHOULD DISPLAY HERE
 
+QA BRANCH JENKINSFILE:
+pipeline {
+    agent any
 
+    environment {
+        APP_NAME = "myapp"
+        QA_SERVER_IP = "172.31.9.251"
+        DOCKER_IMAGE = "sony9014/myapp"
+        APP_VERSION = "v1.0.30"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Set Version') {
+            steps {
+                echo "Using Version: ${APP_VERSION}"
+            }
+        }
+
+        stage('Pull Docker Image') {
+            steps {
+                sh """
+                docker pull ${DOCKER_IMAGE}:${APP_VERSION}
+                """
+            }
+        }
+
+        stage('Deploy to QA Server') {
+            steps {
+                sshagent(['docker-server-ssh']) {
+                    sh """
+                    ssh -o StrictHostKeyChecking=no ec2-user@172.31.9.251 '
+                    docker pull ${DOCKER_IMAGE}:${APP_VERSION} &&
+                    docker stop ${APP_NAME} || true &&
+                    docker rm ${APP_NAME} || true &&
+                    docker run -d -p 8080:8080 --name ${APP_NAME} ${DOCKER_IMAGE}:${APP_VERSION}
+                    '
+                    """
+                }
+            }
+        }
+
+        stage('Post Deployment Validation') {
+            steps {
+                sh """
+                sleep 10
+                curl http://${QA_SERVER_IP}:8080
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ QA Deployment Successful"
+        }
+        failure {
+            echo "❌ QA Deployment Failed"
+        }
+    }
+}
 
 
 
