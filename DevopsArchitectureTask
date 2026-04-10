@@ -1,0 +1,705 @@
+APPLICATION REPO:
+******************
+Feature Branch:
+**************
+pipeline {
+    agent any
+
+    tools {
+        maven 'maven'
+    }
+
+    environment {
+        DOCKER_IMAGE = "sony9014/mydeploy"                                  #dockerhubusername/imagename
+        NEXUS_URL = "http://172.31.42.87:8081"                              #http://nexusserverprivateip:port
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build & SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('sonar-server') {
+                    sh 'mvn clean verify sonar:sonar'
+                }
+            }
+        }
+
+        stage("Quality Gate") {
+            steps {
+                timeout(time: 3, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('Create Pull Request to Dev') {
+            when {
+                not {
+                    branch 'dev'
+                }
+            }
+            steps {
+                script {
+                    def branchName = env.BRANCH_NAME
+                    echo "Creating PR from ${branchName} to dev"
+
+                    withCredentials([string(credentialsId: 'github-api-creds', variable: 'GITHUB_TOKEN')]) {
+                        sh """
+                        curl -X POST https://api.github.com/repos/sonyvinny77/application-repo/pulls \                # sonyvinny77-githubusername/reponame
+                        -H "Authorization: token \$GITHUB_TOKEN" \
+                        -H "Accept: application/vnd.github+json" \
+                        -d '{
+                          "title": "Auto PR: ${branchName} → dev",
+                          "head": "${branchName}",
+                          "base": "dev",
+                          "body": "Created automatically by Jenkins."
+                        }'
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Pipeline Completed Successfully"
+        }
+
+        failure {
+            echo "❌ Pipeline Failed"
+        }
+    }
+}
+
+Dev branch:
+***********
+pipeline { 
+    agent any
+
+    tools {
+        maven 'maven'
+    }
+
+    environment {
+        DOCKER_IMAGE = "sony9014/mydeploy"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Auto Version Increment') {
+            steps {
+                script {
+                    def version = sh(
+                        script: "git describe --tags \$(git rev-list --tags --max-count=1)",
+                        returnStdout: true
+                    ).trim()
+
+                    echo "Latest Tag: ${version}"
+
+                    def newVersion = version.replace("v", "").tokenize('.')
+                    def major = newVersion[0]
+                    def minor = newVersion[1]
+                    def patch = newVersion[2].toInteger() + 1
+
+                    env.APP_VERSION = "v${major}.${minor}.${patch}"
+
+                    echo "Final Version: ${env.APP_VERSION}"
+                }
+            }
+        }
+
+        stage('Tag & Push Version') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'github-cred',              
+                        usernameVariable: 'GIT_USERNAME',
+                        passwordVariable: 'GIT_PASSWORD'
+                    )]) {
+
+                        sh """
+                            git config user.name jenkins
+                            git config user.email jenkins@local
+
+                            # Prevent failure if tag already exists
+                            git tag ${APP_VERSION} || echo "Tag already exists"
+
+                            git push https://\$GIT_USERNAME:\$GIT_PASSWORD@github.com/sonyvinny77/application-repo.git ${APP_VERSION} || echo "Tag already pushed"
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Update Maven Version') {
+            steps {
+                sh "mvn versions:set -DnewVersion=${APP_VERSION}"
+            }
+        }
+
+        stage('Build WAR') {
+            steps {
+                sh "mvn clean package -DskipTests"
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                sh "mvn test"
+            }
+        }
+
+        stage('Upload Artifact to Nexus') {
+            steps {
+                sh "mvn deploy -DskipTests"
+            }
+        }
+
+        stage('Security Scan') {
+            steps {
+                sh "trivy fs --severity HIGH,CRITICAL --exit-code 1 ."
+            }
+        }
+
+        stage('Docker Build & Push') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+
+                        sh """
+                            echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
+
+                            docker build -t ${DOCKER_IMAGE}:${APP_VERSION} .
+
+                            docker push ${DOCKER_IMAGE}:${APP_VERSION}
+
+                            docker logout
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Trigger Deployment Repo - Dev') {
+            steps {
+                script {
+                    build job: 'deployment-repo/dev',
+                    parameters: [
+                        string(name: 'APP_VERSION', value: "${APP_VERSION}")
+                    ]
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Dev Pipeline Completed Successfully"
+        }
+        failure {
+            echo "❌ Dev Pipeline Failed"
+        }
+    }
+}
+
+Release branch:
+**************
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_IMAGE = "sony9014/mydeploy"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Get Latest Docker Version') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+
+                        // Fetch ONLY version (no docker login noise)
+                        env.APP_VERSION = sh(
+                            script: """
+                                curl -s -u \$DOCKER_USER:\$DOCKER_PASS https://hub.docker.com/v2/repositories/${DOCKER_IMAGE}/tags?page_size=100 | \
+                                jq -r '.results[].name' | sort -V | tail -n1
+                            """,
+                            returnStdout: true
+                        ).trim()
+                    }
+
+                    echo "Promoting Docker Version: ${env.APP_VERSION}"
+
+                    if (!env.APP_VERSION) {
+                        error "No Docker version found!"
+                    }
+                }
+            }
+        }
+
+        stage('Trigger QA Deployment') {
+            steps {
+                script {
+                    build job: 'deployment-repo/qa',
+                    propagate: true,   // change to false if you don’t want failure to affect this pipeline
+                    parameters: [
+                        string(name: 'APP_VERSION', value: "${env.APP_VERSION}")
+                    ]
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Release Pipeline Completed - QA Triggered"
+        }
+        failure {
+            echo "❌ Release Pipeline Failed"
+        }
+    }
+}
+
+Hotfix branch:
+**************
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_IMAGE = "sony9014/mydeploy"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Get Latest Docker Version') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'dockerhub-creds',               # dockerhub creds configured in jenkins credentials 
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+
+                        env.APP_VERSION = sh(
+                            script: """
+                                curl -s -u \$DOCKER_USER:\$DOCKER_PASS https://hub.docker.com/v2/repositories/${DOCKER_IMAGE}/tags?page_size=100 | \
+                                jq -r '.results[].name' | sort -V | tail -n1
+                            """,
+                            returnStdout: true
+                        ).trim()
+                    }
+
+                    echo "Hotfix Deploy Version: ${env.APP_VERSION}"
+
+                    if (!env.APP_VERSION) {
+                        error "No Docker version found!"
+                    }
+                }
+            }
+        }
+
+        stage('Trigger PreProd Deployment') {
+            steps {
+                script {
+                    build job: 'deployment-repo/preprod',                                 # jenkins job name of deploymentrepo/respective env
+                    propagate: true,
+                    parameters: [
+                        string(name: 'APP_VERSION', value: "${env.APP_VERSION}")
+                    ]
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Hotfix Pipeline Completed - PreProd Triggered"
+        }
+        failure {
+            echo "❌ Hotfix Pipeline Failed"
+        }
+    }
+}
+
+master/main branch: 
+******************
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_IMAGE = "sony9014/mydeploy"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Get Latest Docker Version') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+
+                        env.APP_VERSION = sh(
+                            script: """
+                                curl -s -u \$DOCKER_USER:\$DOCKER_PASS https://hub.docker.com/v2/repositories/${DOCKER_IMAGE}/tags?page_size=100 | \
+                                jq -r '.results[].name' | sort -V | tail -n1
+                            """,
+                            returnStdout: true
+                        ).trim()
+                    }
+
+                    echo "Deploying to PROD Version: ${env.APP_VERSION}"
+                }
+            }
+        }
+
+        stage('Trigger PROD Deployment') {
+            steps {
+                script {
+                    build job: 'deployment-repo/prod',
+                    parameters: [
+                        string(name: 'APP_VERSION', value: "${env.APP_VERSION}")
+                    ]
+                }
+            }
+        }
+    }
+}
+
+DEPLOYMENT REPO:
+***************
+Dev Branch:
+***********
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'APP_VERSION', description: 'Docker image version to deploy')
+    }
+
+    environment {
+        DOCKER_IMAGE = "sony9014/mydeploy"
+        CONTAINER_NAME = "app"
+        DEV_SERVER = "3.136.27.120"
+    }
+
+    stages {
+
+        stage('Validate Input') {
+            steps {
+                script {
+                    if (!params.APP_VERSION) {
+                        error "APP_VERSION is required!"
+                    }
+                    echo "Deploying Version: ${params.APP_VERSION}"
+                }
+            }
+        }
+
+        stage('Deploy to Dev Server') {
+            steps {
+                script {
+
+                    sshagent(credentials: ['docker-server-ssh']) {
+
+                        sh """
+                        ssh -o StrictHostKeyChecking=no ec2-user@${DEV_SERVER} "
+
+                        echo 'Pulling latest image...'
+                        docker pull ${DOCKER_IMAGE}:${params.APP_VERSION}
+
+                        echo 'Stopping old container...'
+                        docker stop ${CONTAINER_NAME} || true
+
+                        echo 'Removing old container...'
+                        docker rm ${CONTAINER_NAME} || true
+
+                        echo 'Starting new container...'
+                        docker run -d -p 8080:8080 --name ${CONTAINER_NAME} ${DOCKER_IMAGE}:${params.APP_VERSION}
+
+                        echo 'Deployment completed successfully'
+                        "
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Dev Deployment Successful"
+        }
+
+        failure {
+            echo "❌ Dev Deployment Failed"
+        }
+    }
+}
+
+QA Branch:
+**********
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'APP_VERSION', defaultValue: '', description: 'Docker image version to deploy')
+    }
+
+    environment {
+        DOCKER_IMAGE   = "sony9014/mydeploy"
+        CONTAINER_NAME = "app-qa"
+        QA_SERVER      = "16.58.212.42"
+    }
+
+    stages {
+
+        stage('Determine Version') {
+            steps {
+                script {
+                    if (!params.APP_VERSION?.trim()) {
+                        error "APP_VERSION not received from upstream!"
+                    }
+
+                    env.APP_VERSION = params.APP_VERSION
+                    echo "Using APP_VERSION from upstream: ${env.APP_VERSION}"
+                }
+            }
+        }
+
+        stage('Deploy to QA Server') {
+            steps {
+                script {
+                    sshagent(credentials: ['docker-server-ssh']) {
+                        sh """
+                        ssh -o StrictHostKeyChecking=no ec2-user@${QA_SERVER} '
+                        set -e
+
+                        echo "Pulling Docker image ${DOCKER_IMAGE}:${APP_VERSION} ..."
+                        docker pull ${DOCKER_IMAGE}:${APP_VERSION}
+
+                        echo "Stopping old container..."
+                        docker stop ${CONTAINER_NAME} || true
+
+                        echo "Removing old container..."
+                        docker rm ${CONTAINER_NAME} || true
+
+                        echo "Starting new container..."
+                        docker run -d -p 8080:8080 --name ${CONTAINER_NAME} ${DOCKER_IMAGE}:${APP_VERSION}
+
+                        echo "Checking if container started..."
+                        docker ps | grep ${CONTAINER_NAME} || { echo "Container failed to start!"; exit 1; }
+
+                        echo "QA Deployment completed successfully"
+                        '
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ QA Deployment Successful"
+        }
+        failure {
+            echo "❌ QA Deployment Failed"
+        }
+    }
+}
+
+PreProd Branch:
+**************
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'APP_VERSION', defaultValue: '', description: 'Docker image version to deploy')
+    }
+
+    environment {
+        DOCKER_IMAGE   = "sony9014/mydeploy"
+        CONTAINER_NAME = "app-preprod"
+        PREPROD_SERVER = "3.148.108.175"
+    }
+
+    stages {
+
+        stage('Determine Version') {
+            steps {
+                script {
+                    if (!params.APP_VERSION?.trim()) {
+                        error "APP_VERSION not received from upstream!"
+                    }
+
+                    env.APP_VERSION = params.APP_VERSION
+                    echo "Using APP_VERSION from upstream: ${env.APP_VERSION}"
+                }
+            }
+        }
+
+        stage('Deploy to PreProd Server') {
+            steps {
+                script {
+                    sshagent(credentials: ['docker-server-ssh']) {
+                        sh """
+                        ssh -o StrictHostKeyChecking=no ec2-user@${PREPROD_SERVER} '
+                        set -e
+
+                        echo "Pulling Docker image ${DOCKER_IMAGE}:${APP_VERSION} ..."
+                        docker pull ${DOCKER_IMAGE}:${APP_VERSION}
+
+                        echo "Stopping old container..."
+                        docker stop ${CONTAINER_NAME} || true
+
+                        echo "Removing old container..."
+                        docker rm ${CONTAINER_NAME} || true
+
+                        echo "Starting new container..."
+                        docker run -d -p 8082:8080 --name ${CONTAINER_NAME} ${DOCKER_IMAGE}:${APP_VERSION}
+
+                        echo "Checking if container started..."
+                        docker ps | grep ${CONTAINER_NAME} || { echo "Container failed to start!"; exit 1; }
+
+                        echo "PreProd Deployment completed successfully"
+                        '
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ PreProd Deployment Successful"
+        }
+        failure {
+            echo "❌ PreProd Deployment Failed"
+        }
+    }
+}
+
+Prod Branch:
+**************
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'APP_VERSION', defaultValue: '', description: 'Docker image version')
+    }
+
+    environment {
+        DOCKER_IMAGE   = "sony9014/mydeploy"
+        CONTAINER_NAME = "app-prod"
+        PROD_SERVER    = "3.146.107.154"
+    }
+
+    stages {
+
+        stage('Set Version') {
+            steps {
+                script {
+                    if (!params.APP_VERSION?.trim()) {
+                        error "APP_VERSION not received!"
+                    }
+
+                    env.APP_VERSION = params.APP_VERSION
+                    echo "Deploying Version: ${env.APP_VERSION}"
+                }
+            }
+        }
+
+        stage('Deploy to PROD') {
+            steps {
+                script {
+                    sshagent(credentials: ['docker-server-ssh']) {
+                        sh """
+                        ssh -o StrictHostKeyChecking=no ec2-user@${PROD_SERVER} '
+                        set -e
+
+                        echo "Pulling image..."
+                        docker pull ${DOCKER_IMAGE}:${APP_VERSION}
+
+                        echo "Stopping old container..."
+                        docker stop ${CONTAINER_NAME} || true
+
+                        echo "Removing old container..."
+                        docker rm ${CONTAINER_NAME} || true
+
+                        echo "Starting new container..."
+                        docker run -d -p 8083:8080 --name ${CONTAINER_NAME} ${DOCKER_IMAGE}:${APP_VERSION}
+
+                        echo "Verifying container..."
+                        docker ps | grep ${CONTAINER_NAME} || { echo "Container failed!"; exit 1; }
+                        '
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ PROD Deployment Successful"
+        }
+        failure {
+            echo "❌ PROD Deployment Failed"
+        }
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
