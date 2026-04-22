@@ -1,5 +1,4 @@
-Q: Generate a complete enterprise-level DevOps architecture document for a Java application. The document should be structured so 
-I can directly copy it into Word or export it as a PDF.
+Q: Generate a complete enterprise-level DevOps architecture document for a Java application.
 The document should include detailed explanations of the following sections:
 1. Overview of the DevOps architecture for Java applications.
 2. Repository strategy including:
@@ -50,8 +49,7 @@ The document should be detailed (around 15–25 pages worth of explanation when 
 and formatted with headings and clear sections so it can be easily converted to PDF.
 Also include simple workflow diagrams using text arrows for pipeline flows.
 *******************************************************************************************************************************************
-
-Ans: GitFlow branching strategy is followed for above task, GitFlow is a structured branching strategy that uses separate branches 
+GitFlow branching strategy is followed for above task, GitFlow is a structured branching strategy that uses separate branches 
 for development, release, and production to enable controlled and stable software delivery.
 In this branching startegy 3 different repos are present Application, Deployment, Infrastructure repos (repos are created by DevOps Engineer)
 In Application Repo : The Application Repository (app-repo) is where your actual application code and build logic live
@@ -261,7 +259,7 @@ HERE IS THE JENKINS PIPELINE FOR DEVELOPER BRANCH:
             steps {
                 script {
                     withCredentials([usernamePassword(
-                        credentialsId: 'github-cred',              
+                        credentialsId: 'github-cred',              #From Manage Jenkins-Credentials-ID of github username with passwd
                         usernameVariable: 'GIT_USERNAME',
                         passwordVariable: 'GIT_PASSWORD'
                     )]) {
@@ -280,7 +278,7 @@ HERE IS THE JENKINS PIPELINE FOR DEVELOPER BRANCH:
             }
         }
 
-        stage('Update Maven Version') {        #before building the war file it will update the version of war file in pom.xml
+        stage('Update Maven Version') {                             #Before building the war file it will update the version of war file in pom.xml
             steps {
                 sh "mvn versions:set -DnewVersion=${APP_VERSION}"
             }
@@ -314,7 +312,7 @@ HERE IS THE JENKINS PIPELINE FOR DEVELOPER BRANCH:
             steps {
                 script {
                     withCredentials([usernamePassword(
-                        credentialsId: 'dockerhub-creds',
+                        credentialsId: 'dockerhub-creds',                     #Credentials id we mention from manage jenkins-credentials section
                         usernameVariable: 'DOCKER_USER',
                         passwordVariable: 'DOCKER_PASS'
                     )]) {
@@ -355,10 +353,9 @@ HERE IS THE JENKINS PIPELINE FOR DEVELOPER BRANCH:
     }
 }
 *****************************************************************************************************************************
- when the image is pushed to docker registry from application repo (dev branch) it will trigger dev branch in deployment repo and it 
-will deploy to dev server (dev-EC2)
+When the image is pushed to docker registry from application repo (dev branch) it will trigger dev branch in deployment repo and it will deploy to dev server.
 HERE IS THE JENKINS PIPELINE FOR DEVELOPER BRANCH IN DEPLOYMENT REPO:
-    Dev Branch:
+Dev Branch:
 ***********
 pipeline {
     agent any
@@ -430,13 +427,13 @@ pipeline {
 1. To check integration compatability 
    feature A work alone 
    feature B work alone 
-   integration compatability means nothing but checking whether feature A+B are working together are not 
+   integration compatability means checking whether feature A+B are working together are not 
 2. To check the Dependencies conflicts 
 3. To make sure stable Dev environment (code)
 ************************************************************************************************************************************
 RELEASE BRANCH:
      A release branch is a temporary branch created from the develop branch,A release branch is used to stabilize, test, and finalize code 
-before merging into production (main).
+before merging into production (main). Only minor changes and minor bug fixes will be done here
 Main Purpose:
 Final testing (QA, UAT)
 Bug fixing (only critical fixes)
@@ -569,7 +566,7 @@ pipeline {
                 }
             }
         }
-        stage('Manual Approval for PreProd') {  #after deploying to QA we need to deploy in pre-prod through manual approval
+        stage('Manual Approval for PreProd') {                 #after deploying to QA we need to deploy in pre-prod through manual approval
       steps {
         timeout(time: 10, unit: 'MINUTES') {
             input(
@@ -603,8 +600,7 @@ pipeline {
 }
 
 *************************************************************************************************************************************
-when the image is pushed to docker registry from application repo (release branch) it will trigger QA branch in deployment repo and it 
-will deploy to QA server (QA-EC2)
+when the image is pushed to docker registry from application repo (release branch) it will trigger QA branch in deployment repo and it will deploy to QA server.
 QA-SERVER/EC2(QUALITY-ANALYSIS) - It is the place where functional testing is done, where quality of the code is tested. If there are 
 any bugs found then "FIX-BRANCH" is created from release, developers will work on the code and make the changes and merge the 
 "FIX-BRANCH" into "RELEASE-BRANCH"  and sync the changes in release branch with developer branch 
@@ -641,7 +637,7 @@ pipeline {
         stage('Deploy to QA Server') {
             steps {
                 script {
-                    sshagent(credentials: ['docker-server-ssh']) {           # this is the QA-server PEM file configured in jenkins(credentials)
+                    sshagent(credentials: ['docker-server-ssh']) {                  # this is the QA-server PEM file configured in jenkins(credentials)
 
                         sh """
                         ssh -o StrictHostKeyChecking=no ec2-user@${QA_SERVER} '
@@ -685,8 +681,9 @@ If there are any bugs found then "FIX-BRANCH" is created from release branch, de
 Pipeline Stages for Fix Branch
 ✅ Typical Stages
 Checkout → Build → Unit Tests → Static Code Analysis → Package → PR → release branch
-once fix branch is merged to release branch, then Release Branch Pipeline Runs Again
-**************************************************************************************************************
+once fix branch is merged to release branch, then Release Branch Pipeline Runs Again 
+Here Build and its Version should be new one if u take the old build and version bug can be reintroduced again.
+*******************************************************************************************************************************************
 once deployment to QA is done, manually (upstream job) will trigger the deployment of release branch into PRE-PROD server is done. 
 In pre-prod server it is the place where integration testing is done (integration with other modules of the organisation).
 HERE IS THE PIPELINE CODE FOR DEPLOYMENT REPO-PREPROD BRANCH:
@@ -767,8 +764,7 @@ You create a hotfix branch from the main/production branch (often called main or
 Make the necessary fix
 Test it quickly
 Merge it back into:
-the production branch (to deploy immediately)
-and usually the development branch (so the fix isn’t lost in future releases).
+the production branch (to deploy immediately) and usually to the development branch (so the fix isn’t lost in future releases).
 HERE IS THE PIPELINE FOR HOTFIX BRANCH:
 pipeline {
     agent any
@@ -983,18 +979,15 @@ pipeline {
 }
 
 ******************************************************************************************
-IN JENKINS DASHBOARD 
-create 2 separate multibranch pipeline jobs for Application-repo job, Deployment-repo job 
-Inside the application job configure branch source with github add github credentials and repo url so that it will pull all branches from that repo 
+IN JENKINS DASHBOARD CREATE 2 SEPARATE JOBS FOR EACH REPO APP-JOB AND DEPLOY-JOB. 
+INSIDE APP-JOB CONFIGURE BRANCH SOURCE with github add github credentials and repo url so that it will pull all branches from that repo 
 and creates seperate job for each branch.
 After every commit instead of doing scan repo from jenkins job we can configure webhook in github this will automatically trigger the job.
-Configuring webhook in github:
+CONFIGURING WEBHOOK IN GITHUB:
 Application-Repo-->Webhook-->Add Webhook-->Payload URL: http://<jenkinsprivateip:8080/github-webhook/-->Content type:application/json-->
 Events: Select just the push event.
-
-** CONFIGURATION OF CREDENTIALS IN JENKINS SERVER
- With the help of these credentials jenkins server communicate with those respective servers
-
+CONFIGURATION OF CREDENTIALS IN JENKINS SERVER:
+With the help of these credentials jenkins server communicate with those respective servers
 1. Manage jenkins > system > add sonarqube > name: sonar-server >
    URL: http://sonar-serverprivate ip:9000 > save
    credentials > add secret text > copy paste the sonar-token > 
@@ -1005,10 +998,10 @@ Events: Select just the push event.
 3. Manage jenkins > credentials > global > add credentials > kind: secret text
    (copy paste github token) Id: github-api-creds (this is used for Pull Request)
 4. Manage jenkins > credentials > global > add credentials > kind: username with password,
-   > username: admin(eg) > passord: nexus123 > Id: nexus-cred > save 
-5. Manage jenkins > credentials > global > add credentials > kind: SSH with private key 
-   copy paste the pem keys of dev,qa,pre-prod,prod servers with the help of pem file application 
-   is deployed in respective servers (try to have same pem file for every server)
+   > username: admin > passord: Nexus@123 > Id: nexus-cred > save 
+5. Manage jenkins > credentials > global > add credentials > kind: SSH with private key,
+COPY PASTE THE PEM KEY (KEYPAIR) USED WHILE CREATION OF SERVERS WILL BE STORED IN DOWNLOADS FOLDER
+With the help of pem file application is deployed in respective servers (try to have same pem file for every server)
 
 *********************************************************************************************
 CONFIGURING PATH OF THE TOOLS IN JENKINS-SERVER
@@ -1020,7 +1013,7 @@ CONFIGURING PATH OF THE TOOLS IN JENKINS-SERVER
                  add git > name: git > path: /opt/git > save
 ************************************************************************************************
 PRE-REQUISTIES:
-1. Launch an EC2 instance name it as Jenkins-Server - Where java,git,maven jenkins should be installed.
+1. Launch an EC2 instance name it as Jenkins-Server - Where java,git,maven,jenkins,docker,trivy should be installed.
 * Jenkins-plugins: Sonarqube-scanner, Git-hub integration plugin, Git-hub branch source plugin SHOULD BE INSTALLED FROM MANAGE JENKINS.
 STEPS FOR INSTALLING TRIVY IN JENKINS SERVER:
 1.Add Trivy Repository---Run below commands in jenkins server:
@@ -1039,7 +1032,7 @@ trivy --version
 trivy image sony9014/myapp:v1.0.7
 This command will show us the vulnerabilities like (HIGH,MEDIUM,CRITICAL,LOW)
 5. I have added trivy scan stage in jenkinsfile so that it will scan the image 
-###################################################################
+-----------------------------------------------------------------------------------------------------
 2.Launch another instance name it as Sonar-Server - Where Docker should be installed
 We ran sonarqube by creating a docker container: 
 Commands to install docker:
@@ -1053,7 +1046,7 @@ docker ps
 By giving the public ip of sonar server we can access it through browser
 >> http://<sonar-public-ip>:9000
 Credentials by default it will be username:admin password:admin later change the default password
-**IN SONAR-SERVER (browser) **
+IN SONAR-SERVER (browser)
 1. CREATE A PROJECT:
    projects >> create project >> project name: myproject >> projectkey: myproject-key >> save
 2. GENERATE-TOKEN:
@@ -1061,7 +1054,7 @@ Credentials by default it will be username:admin password:admin later change the
 3. CREATING WEBHOOK 
   administartion >> configuration >> webhook >> click on create >> name: sonar-hook >> 
   URL: http://jenkinspublicIP:8080/sonarqube-webhook/ >> save 
-##################################################################################
+---------------------------------------------------------------------------------------------------------------------
 3.STEPS FOR INSTALLING NEXUS:
 CREATE AN EC2 INSTANCE FOR NEXUS WITH SSH PORT 22 AND TCP PORT 8081 FOR ACCESSING THROUGH BROWSER
 ON NEXUS SERVER COMMANDS:
@@ -1076,9 +1069,9 @@ docker ps
 >> docker run -d --name nexus -p 8081:8081 sonatype/nexus3            #DEFAULT PORT OF nexus:8081
 By giving the public ip of nexus server we can access it through browser
 >> http://<nexus-public-ip>:8081
-Default username: admin, passwd: docker exec -it nexus cat /nexus-data/admin.password (to get the password 
+Default username: admin, password: docker exec -it nexus cat /nexus-data/admin.password (to get the password 
 run this command in the nexus-server)
-** CREATE MAVEN REPOSITORY : 
+CREATE MAVEN REPOSITORY : 
 Settings → Repositories → Create repository
 Create:
 maven2 (hosted)
@@ -1092,14 +1085,13 @@ vi settings.xml
 <settings>
  <servers>
    <server>
-     <id>nexus</id>                          # SHOULD MATCH WITH POM.XML ID FROM DISTRIBUTION MANAGEMENT SECTION
+     <id>nexus</id>                                                # SHOULD MATCH WITH POM.XML ID FROM DISTRIBUTION MANAGEMENT SECTION
      <username>admin</username>
-     <password>YOUR_NEXUS_PASSWORD</password>            # NEXUS LOGIN PASSWORD WE SHOULD MENTION.MY PASSWORD IS Nexus@123
+     <password>YOUR_NEXUS_PASSWORD</password>                             # NEXUS LOGIN PASSWORD WE SHOULD MENTION.        MY PASSWORD IS Nexus@123
    </server>
  </servers>
 </settings>  
-8. UPDATE pom.xml [ROOT POM.XML WHICH IS INSIDE OF application-repo/pom.xml NOT INSIDE OF SERVER FOLDER OR NOT INSIDE OF WEBAPP FOLDER             
-                   THEY ARE PARENT POM.XML]
+8. UPDATE pom.xml [ROOT POM.XML WHICH IS INSIDE OF application-repo/pom.xml NOT INSIDE OF SERVER FOLDER OR NOT INSIDE OF WEBAPP FOLDER THEY ARE PARENT POM.XML]
 <distributionManagement>
     <repository>
         <id>nexus</id>                                                     # SHOULD MATCH WITH SETTINGS.XML ID
