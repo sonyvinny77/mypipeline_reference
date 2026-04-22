@@ -1,0 +1,1109 @@
+Q: Generate a complete enterprise-level DevOps architecture document for a Java application. The document should be structured so 
+I can directly copy it into Word or export it as a PDF.
+The document should include detailed explanations of the following sections:
+1. Overview of the DevOps architecture for Java applications.
+2. Repository strategy including:
+ * Application repository
+ * Deployment repository
+ * Infrastructure repository.
+3. Branching strategy using Git including:
+ * main branch
+ * develop branch
+ * feature branches
+ * release branches
+ * hotfix branches.
+4. Developer workflow explaining how developers create feature branches, push code, create pull requests, and merge to develop.
+5. CI/CD pipeline design for the application repository including:
+* feature branch pipeline stages
+* pull request validation pipeline
+* develop branch integration pipeline
+* release pipeline
+* production pipeline.
+6. Explanation of why the code must be rebuilt after merging into develop.
+7. Artifact management strategy including:
+ * building Docker images
+ * storing artifacts
+ * artifact versioning.
+8. Artifact promotion strategy across environments:
+  * DEV
+  * QA
+  * PP (pre-production)
+  * PROD.
+9. Deployment pipeline design including stages for:
+ * DEV deployment
+ * QA deployment
+ * PP deployment
+ * PROD deployment
+ * approval gates.
+10. Infrastructure pipeline strategy using Infrastructure as Code including:
+* infrastructure repository structure
+* Terraform modules and environment folders
+* infra branching strategy
+* infra CI pipeline
+* terraform validate, plan, apply stages
+* security scanning.
+11. Terraform state management and remote backend strategy.
+12. Monitoring and logging strategy.
+13. Security practices in CI/CD pipelines.
+14. DevOps best practices for enterprise systems.
+The document should be detailed (around 15–25 pages worth of explanation when formatted), written like a professional architecture document,
+and formatted with headings and clear sections so it can be easily converted to PDF.
+Also include simple workflow diagrams using text arrows for pipeline flows.
+*******************************************************************************************************************************************
+
+Ans: GitFlow branching strategy is followed for above task, GitFlow is a structured branching strategy that uses separate branches 
+for development, release, and production to enable controlled and stable software delivery.
+In this branching startegy 3 different repos are present Application, Deployment, Infrastructure repos (repos are created by DevOps Engineer)
+In Application Repo : The Application Repository (app-repo) is where your actual application code and build logic live
+app-repo/
+ ├── src/
+ │    ├── main/
+ │    │    ├── java/
+ │    │    └── resources/
+ │    └── test/
+ ├── pom.xml
+ ├── Dockerfile
+ ├── Jenkinsfile
+ ├── application.yml
+ ├── sonar-project.properties
+ ├── README.md
+ └── .gitignore
+* Branches Inside Application Repo (GitFlow)
+main        → production
+develop     → integration
+feature/*   → new features
+release/*   → release prep
+hotfix/*    → production fixes
+****************************************************************************************************************************************
+What is a Deployment Repository?
+👉 The Deployment Repository contains everything needed to deploy your application to different environments (DEV, QA, PP, PROD).
+👉 It does NOT contain application source code
+👉 It uses the artifact (Docker image) built from the Application Repository
+DEPLOYMENT-REPO/
+ ├── helm/
+ │    └── myapp/
+ ├── environments/
+ │    ├── dev/
+ │    ├── qa/
+ │    ├── pp/
+ │    └── prod/
+ ├── Jenkinsfile
+ ├── scripts/
+ └── README.md
+*********************************************************************************************************************************************
+What is an Infrastructure Repository?
+👉 The Infrastructure Repository (infra-repo) contains code to create, manage, and version infrastructure using Infrastructure as Code (IaC).
+👉 Instead of manually creating servers, networks, and databases, you define everything in code using Terraform.
+INFRA-REPO/
+ ├── modules/
+ │    ├── vpc/
+ │    ├── ec2/
+ │    ├── rds/
+ │    └── eks/
+ │
+ ├── environments/
+ │    ├── dev/
+ │    ├── qa/
+ │    ├── pp/
+ │    └── prod/
+ │
+ ├── backend/
+ │    └── backend.tf
+ │
+ ├── providers.tf
+ ├── variables.tf
+ ├── outputs.tf
+ └── README.md
+
+👉 “We maintain three separate repositories—application, deployment, and infrastructure—to achieve separation of concerns, 
+independent lifecycle management, better security, team ownership, and scalable CI/CD pipelines.”
+ 
+  Visual Understanding
+           ┌──────────────┐
+           │ Infra Repo   │ → Creates infra
+           └──────┬───────┘
+                  ↓
+           ┌──────────────┐
+           │ App Repo     │ → Builds Docker Image
+           └──────┬───────┘
+                  ↓
+           ┌──────────────┐
+           │ Deployment   │ → Deploys to DEV/QA/PROD
+           └──────────────┘
+**************************************************************************************************************************************
+Whenever their is a requirement to develop a new feature, then developer will create a "feature branch" from "developer branch". 
+“When a developer pushes a feature branch to github, a webhook from GitHub triggers the CI pipeline configured for that branch. 
+The pipeline then validates the code by running build and test stages before merging into develop.”
+HERE IS THE JENKINS PIPELINE FOR FEATURE BRANCH:
+
+pipeline {
+    agent any
+
+    tools {
+        maven 'maven'
+    }
+
+    environment {
+        DOCKER_IMAGE = "sony9014/mydeploy"                                  #dockerhubusername/imagename
+        NEXUS_URL = "http://172.31.42.87:8081"                              #http://nexusserverprivateip:port
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build & SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('sonar-server') {
+                    sh 'mvn clean verify sonar:sonar'
+                }
+            }
+        }
+
+        stage("Quality Gate") {
+            steps {
+                timeout(time: 3, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('Create Pull Request to Dev') {
+            when {
+                not {
+                    branch 'dev'
+                }
+            }
+            steps {
+                script {
+                    def branchName = env.BRANCH_NAME
+                    echo "Creating PR from ${branchName} to dev"
+
+                    withCredentials([string(credentialsId: 'github-api-creds', variable: 'GITHUB_TOKEN')]) {
+                        sh """
+                        curl -X POST https://api.github.com/repos/sonyvinny77/application-repo/pulls \                # sonyvinny77-githubusername/reponame
+                        -H "Authorization: token \$GITHUB_TOKEN" \
+                        -H "Accept: application/vnd.github+json" \
+                        -d '{
+                          "title": "Auto PR: ${branchName} → dev",
+                          "head": "${branchName}",
+                          "base": "dev",
+                          "body": "Created automatically by Jenkins."
+                        }'
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Pipeline Completed Successfully"
+        }
+
+        failure {
+            echo "❌ Pipeline Failed"
+        }
+    }
+}
+*****************************************************************************************************************************
+DEVELOPER BRANCH:
+                “When multiple feature branches are merged into develop, the branch becomes an integration point where all features are combined, 
+triggering a CI pipeline to build, test, and validate the complete application before moving to the release stage.”
+HERE IS THE JENKINS PIPELINE FOR DEVELOPER BRANCH:
+  pipeline { 
+    agent any
+
+    tools {
+        maven 'maven'
+    }
+
+    environment {
+        DOCKER_IMAGE = "sony9014/mydeploy"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Auto Version Increment') {
+            steps {
+                script {
+                    def version = sh(
+                        script: "git describe --tags \$(git rev-list --tags --max-count=1)",
+                        returnStdout: true
+                    ).trim()
+
+                    echo "Latest Tag: ${version}"
+
+                    def newVersion = version.replace("v", "").tokenize('.')
+                    def major = newVersion[0]
+                    def minor = newVersion[1]
+                    def patch = newVersion[2].toInteger() + 1
+
+                    env.APP_VERSION = "v${major}.${minor}.${patch}"
+
+                    echo "Final Version: ${env.APP_VERSION}"
+                }
+            }
+        }
+
+        stage('Tag & Push Version') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'github-cred',              
+                        usernameVariable: 'GIT_USERNAME',
+                        passwordVariable: 'GIT_PASSWORD'
+                    )]) {
+
+                        sh """
+                            git config user.name jenkins
+                            git config user.email jenkins@local
+
+                            # Prevent failure if tag already exists
+                            git tag ${APP_VERSION} || echo "Tag already exists"
+
+                            git push https://\$GIT_USERNAME:\$GIT_PASSWORD@github.com/sonyvinny77/application-repo.git ${APP_VERSION} || echo "Tag already pushed"
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Update Maven Version') {        #before building the war file it will update the version of war file in pom.xml
+            steps {
+                sh "mvn versions:set -DnewVersion=${APP_VERSION}"
+            }
+        }
+
+        stage('Build WAR') {
+            steps {
+                sh "mvn clean package -DskipTests"
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                sh "mvn test"
+            }
+        }
+
+        stage('Upload Artifact to Nexus') {
+            steps {
+                sh "mvn deploy -DskipTests"
+            }
+        }
+
+        stage('Security Scan') {
+            steps {
+                sh "trivy fs --severity HIGH,CRITICAL --exit-code 1 ."
+            }
+        }
+
+        stage('Docker Build & Push') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+
+                        sh """
+                            echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
+
+                            docker build -t ${DOCKER_IMAGE}:${APP_VERSION} .
+
+                            docker push ${DOCKER_IMAGE}:${APP_VERSION}
+
+                            docker logout
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Trigger Deployment Repo - Dev') {
+            steps {
+                script {
+                    build job: 'deployment-repo/dev',
+                    parameters: [
+                        string(name: 'APP_VERSION', value: "${APP_VERSION}")
+                    ]
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Dev Pipeline Completed Successfully"
+        }
+        failure {
+            echo "❌ Dev Pipeline Failed"
+        }
+    }
+}
+*****************************************************************************************************************************
+ when the image is pushed to docker registry from application repo (dev branch) it will trigger dev branch in deployment repo and it 
+will deploy to dev server (dev-EC2)
+HERE IS THE JENKINS PIPELINE FOR DEVELOPER BRANCH IN DEPLOYMENT REPO:
+    Dev Branch:
+***********
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'APP_VERSION', description: 'Docker image version to deploy')
+    }
+
+    environment {
+        DOCKER_IMAGE = "sony9014/mydeploy"                                 # the image pushed to docker registry 
+        CONTAINER_NAME = "app"
+        DEV_SERVER = "Public-IP"
+    }
+
+    stages {
+
+        stage('Validate Input') {
+            steps {
+                script {
+                    if (!params.APP_VERSION) {
+                        error "APP_VERSION is required!"
+                    }
+                    echo "Deploying Version: ${params.APP_VERSION}"
+                }
+            }
+        }
+
+        stage('Deploy to Dev Server') {
+            steps {
+                script {
+
+                    sshagent(credentials: ['docker-server-ssh']) {                 # this is the dev-server PEM file configured in jenkins(credentials)
+
+                        sh """
+                        ssh -o StrictHostKeyChecking=no ec2-user@${DEV_SERVER} "
+
+                        echo 'Pulling latest image...'
+                        docker pull ${DOCKER_IMAGE}:${params.APP_VERSION}
+
+                        echo 'Stopping old container...'
+                        docker stop ${CONTAINER_NAME} || true
+
+                        echo 'Removing old container...'
+                        docker rm ${CONTAINER_NAME} || true
+
+                        echo 'Starting new container...'
+                        docker run -d -p 8080:8080 --name ${CONTAINER_NAME} ${DOCKER_IMAGE}:${params.APP_VERSION}
+
+                        echo 'Deployment completed successfully'
+                        "
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Dev Deployment Successful"
+        }
+
+        failure {
+            echo "❌ Dev Deployment Failed"
+        }
+    }
+}
+** Why Rebuild Happens Here (Dev branch)
+1. To check integration compatability 
+   feature A work alone 
+   feature B work alone 
+   integration compatability means nothing but checking whether feature A+B are working together are not 
+2. To check the Dependencies conflicts 
+3. To make sure stable Dev environment (code)
+************************************************************************************************************************************
+RELEASE BRANCH:
+     A release branch is a temporary branch created from the develop branch,A release branch is used to stabilize, test, and finalize code 
+before merging into production (main).
+Main Purpose:
+Final testing (QA, UAT)
+Bug fixing (only critical fixes)
+Versioning
+Preparing production-ready code 
+******************************************
+HERE IS THE JENKINS PIPELINE FOR RELEASE BRANCH IN APPLICATION REPO
+pipeline {
+    agent any
+
+    tools {
+        maven 'maven'
+    }
+
+    parameters {
+        string(name: 'APP_VERSION', description: 'Version from dev (example: v1.0.1)')
+    }
+
+    environment {
+        DOCKER_IMAGE = "sony9014/mydeploy"         #image name  from docker registry 
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+       stage('Auto Version Increment') {
+            steps {
+                script {
+                    def version = sh(
+                        script: "git describe --tags \$(git rev-list --tags --max-count=1)",
+                        returnStdout: true
+                    ).trim()
+
+                    echo "Latest Tag: ${version}"
+
+                    def newVersion = version.replace("v", "").tokenize('.')
+                    def major = newVersion[0]
+                    def minor = newVersion[1]
+                    def patch = newVersion[2].toInteger() + 1
+
+                    env.APP_VERSION = "v${major}.${minor}.${patch}"
+
+                    echo "Final Version: ${env.APP_VERSION}"
+                }
+            }
+        }
+
+        stage('Tag & Push Version') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'github-cred',              
+                        usernameVariable: 'GIT_USERNAME',
+                        passwordVariable: 'GIT_PASSWORD'
+                    )]) {
+
+                        sh """
+                            git config user.name jenkins
+                            git config user.email jenkins@local
+
+                            # Prevent failure if tag already exists
+                            git tag ${APP_VERSION} || echo "Tag already exists"
+
+                            git push https://\$GIT_USERNAME:\$GIT_PASSWORD@github.com/sonyvinny77/application-repo.git ${APP_VERSION} || echo "Tag already pushed"
+                        """
+                    }
+                }
+            }
+        } 
+
+        stage('Update Maven Version') {
+            steps {
+                sh "mvn versions:set -DnewVersion=${APP_VERSION}"
+            }
+        }
+
+        stage('Build WAR') {
+            steps {
+                sh "mvn clean package -DskipTests"
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                sh "mvn test"
+            }
+        }
+
+        stage('Security Scan') {
+            steps {
+                sh "trivy fs --severity HIGH,CRITICAL --exit-code 1 ."
+            }
+        }
+
+        stage('Docker Build & Push') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+
+                        sh """
+                            echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
+
+                            docker build -t ${DOCKER_IMAGE}:${APP_VERSION} .
+
+                            docker push ${DOCKER_IMAGE}:${APP_VERSION}
+
+                            docker logout
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Trigger Deployment Repo - QA') {
+            steps {
+                script {
+                    build job: 'deployment-repo/qa',
+                    parameters: [
+                        string(name: 'APP_VERSION', value: "${APP_VERSION}")
+                    ]
+                }
+            }
+        }
+        stage('Manual Approval for PreProd') {  #after deploying to QA we need to deploy in pre-prod through manual approval
+      steps {
+        timeout(time: 10, unit: 'MINUTES') {
+            input(
+                message: 'Approve deployment to PreProd?',
+                ok: 'Deploy',
+                submitter: 'sony'
+            )
+        }
+    }
+}        
+        stage('Trigger Deployment Repo - PreProd') {
+    steps {
+        script {
+            build job: 'deployment-repo/preprod',
+            parameters: [
+                string(name: 'APP_VERSION', value: "${APP_VERSION}")
+            ]
+        }
+    }
+}
+    }
+
+    post {
+        success {
+            echo "✅ Release Pipeline Completed → QA Deployment Triggered"
+        }
+        failure {
+            echo "❌ Release Pipeline Failed"
+        }
+    }
+}
+
+*************************************************************************************************************************************
+when the image is pushed to docker registry from application repo (release branch) it will trigger QA branch in deployment repo and it 
+will deploy to QA server (QA-EC2)
+QA-SERVER/EC2(QUALITY-ANALYSIS) - It is the place where functional testing is done, where quality of the code is tested. If there are 
+any bugs found then "FIX-BRANCH" is created from release, developers will work on the code and make the changes and merge the 
+"FIX-BRANCH" into "RELEASE-BRANCH"  and sync the changes in release branch with developer branch 
+
+HERE IS THE JENKINS PIPELINE FOR QA BRANCH IN DEPLOYMENT REPO:
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'APP_VERSION', defaultValue: '', description: 'Docker image version to deploy')
+    }
+
+    environment {
+        DOCKER_IMAGE   = "sony9014/mydeploy"
+        CONTAINER_NAME = "app-qa"
+        QA_SERVER      = "PUBLIC-IP"
+    }
+
+    stages {
+
+        stage('Determine Version') {
+            steps {
+                script {
+                    if (!params.APP_VERSION?.trim()) {
+                        error "APP_VERSION not received from upstream!"
+                    }
+
+                    env.APP_VERSION = params.APP_VERSION
+                    echo "Using APP_VERSION from upstream: ${env.APP_VERSION}"
+                }
+            }
+        }
+
+        stage('Deploy to QA Server') {
+            steps {
+                script {
+                    sshagent(credentials: ['docker-server-ssh']) {           # this is the QA-server PEM file configured in jenkins(credentials)
+
+                        sh """
+                        ssh -o StrictHostKeyChecking=no ec2-user@${QA_SERVER} '
+                        set -e
+
+                        echo "Pulling Docker image ${DOCKER_IMAGE}:${APP_VERSION} ..."
+                        docker pull ${DOCKER_IMAGE}:${APP_VERSION}
+
+                        echo "Stopping old container..."
+                        docker stop ${CONTAINER_NAME} || true
+
+                        echo "Removing old container..."
+                        docker rm ${CONTAINER_NAME} || true
+
+                        echo "Starting new container..."
+                        docker run -d -p 8080:8080 --name ${CONTAINER_NAME} ${DOCKER_IMAGE}:${APP_VERSION}
+
+                        echo "Checking if container started..."
+                        docker ps | grep ${CONTAINER_NAME} || { echo "Container failed to start!"; exit 1; }
+
+                        echo "QA Deployment completed successfully"
+                        '
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ QA Deployment Successful"
+        }
+        failure {
+            echo "❌ QA Deployment Failed"
+        }
+    }
+}
+
+If there are any bugs found then "FIX-BRANCH" is created from release branch, developer will work on the code make necessary changes 
+Pipeline Stages for Fix Branch
+✅ Typical Stages
+Checkout → Build → Unit Tests → Static Code Analysis → Package → PR → release branch
+once fix branch is merged to release branch, then Release Branch Pipeline Runs Again
+**************************************************************************************************************
+once deployment to QA is done, manually (upstream job) will trigger the deployment of release branch into PRE-PROD server is done. 
+In pre-prod server it is the place where integration testing is done (integration with other modules of the organisation).
+HERE IS THE PIPELINE CODE FOR DEPLOYMENT REPO-PREPROD BRANCH:
+
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'APP_VERSION', defaultValue: '', description: 'Docker image version to deploy')
+    }
+
+    environment {
+        DOCKER_IMAGE   = "sony9014/mydeploy"
+        CONTAINER_NAME = "app-preprod"
+        PREPROD_SERVER = "PREPRODSERVERPUBLICIP"
+    }
+
+    stages {
+
+        stage('Determine Version') {
+            steps {
+                script {
+                    if (!params.APP_VERSION?.trim()) {
+                        error "APP_VERSION not received from upstream!"
+                    }
+
+                    env.APP_VERSION = params.APP_VERSION
+                    echo "Using APP_VERSION from upstream: ${env.APP_VERSION}"
+                }
+            }
+        }
+
+        stage('Deploy to PreProd Server') {
+            steps {
+                script {
+                    sshagent(credentials: ['docker-server-ssh']) {
+                        sh """
+                        ssh -o StrictHostKeyChecking=no ec2-user@${PREPROD_SERVER} '
+                        set -e
+
+                        echo "Pulling Docker image ${DOCKER_IMAGE}:${APP_VERSION} ..."
+                        docker pull ${DOCKER_IMAGE}:${APP_VERSION}
+
+                        echo "Stopping old container..."
+                        docker stop ${CONTAINER_NAME} || true
+
+                        echo "Removing old container..."
+                        docker rm ${CONTAINER_NAME} || true
+
+                        echo "Starting new container..."
+                        docker run -d -p 8082:8080 --name ${CONTAINER_NAME} ${DOCKER_IMAGE}:${APP_VERSION}
+
+                        echo "Checking if container started..."
+                        docker ps | grep ${CONTAINER_NAME} || { echo "Container failed to start!"; exit 1; }
+
+                        echo "PreProd Deployment completed successfully"
+                        '
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ PreProd Deployment Successful"
+        }
+        failure {
+            echo "❌ PreProd Deployment Failed"
+        }
+    }
+}
+
+HOTFIX BRANCH:
+If there are any urgent fixes from production we create hotfix branch from main. 
+You create a hotfix branch from the main/production branch (often called main or master)
+Make the necessary fix
+Test it quickly
+Merge it back into:
+the production branch (to deploy immediately)
+and usually the development branch (so the fix isn’t lost in future releases).
+HERE IS THE PIPELINE FOR HOTFIX BRANCH:
+pipeline {
+    agent any
+
+    tools {
+        maven 'maven'
+    }
+
+    parameters {
+        string(name: 'APP_VERSION', description: 'Hotfix version (example: v1.0.2)')
+    }
+
+    environment {
+        DOCKER_IMAGE = "sony9014/mydeploy"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Validate Version') {
+            steps {
+                script {
+                    if (!params.APP_VERSION) {
+                        error "APP_VERSION is required!"
+                    }
+                    env.APP_VERSION = params.APP_VERSION
+                    echo "Using Hotfix Version: ${env.APP_VERSION}"
+                }
+            }
+        }
+
+        stage('Update Maven Version') {
+            steps {
+                sh "mvn versions:set -DnewVersion=${APP_VERSION}"
+            }
+        }
+
+        stage('Build WAR') {
+            steps {
+                sh "mvn clean package -DskipTests"
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                sh "mvn test"
+            }
+        }
+
+        stage('Security Scan') {
+            steps {
+                sh "trivy fs --severity HIGH,CRITICAL --exit-code 1 ."
+            }
+        }
+        stage('Debug Files') {
+    steps {
+        sh '''
+        echo "==== CURRENT DIRECTORY ===="
+        pwd
+
+        echo "==== LIST ROOT FILES ===="
+        ls -l
+
+        echo "==== CHECK WAR FILE ===="
+        ls -l webapp/target || true
+
+        echo "==== CHECK .dockerignore ===="
+        cat .dockerignore || true
+        '''
+    }
+}
+        stage('Docker Build & Push') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+
+                        sh """
+                            echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
+
+                            docker build -t ${DOCKER_IMAGE}:${APP_VERSION} .
+
+                            docker push ${DOCKER_IMAGE}:${APP_VERSION}
+
+                            docker logout
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Trigger Deployment Repo - PreProd') {
+            steps {
+                script {
+                    build job: 'deployment-repo/preprod',
+                    parameters: [
+                        string(name: 'APP_VERSION', value: "${APP_VERSION}")
+                    ]
+                }
+            }
+        }
+
+        stage('Manual Approval for Production') {
+            steps {
+                timeout(time: 10, unit: 'MINUTES') {
+                    input(
+                        message: 'Deploy Hotfix to Production?',
+                        ok: 'Deploy',
+                        submitter: 'sony'
+                    )
+                }
+            }
+        }
+
+        stage('Trigger Deployment Repo - Prod') {
+            steps {
+                script {
+                    build job: 'deployment-repo/prod',
+                    parameters: [
+                        string(name: 'APP_VERSION', value: "${APP_VERSION}")
+                    ]
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Hotfix deployed to Production successfully!"
+        }
+        failure {
+            echo "❌ Hotfix pipeline failed"
+        }
+    }
+}
+
+HERE IS THE PIPELINE FOR PROD BRANCH-DEPLOYMENT REPO:
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'APP_VERSION', defaultValue: '', description: 'Docker image version')
+    }
+
+    environment {
+        DOCKER_IMAGE   = "sony9014/mydeploy"
+        CONTAINER_NAME = "app-prod"
+        PROD_SERVER    = "3.147.238.46"
+    }
+
+    stages {
+
+        stage('Set Version') {
+            steps {
+                script {
+                    if (!params.APP_VERSION?.trim()) {
+                        error "APP_VERSION not received!"
+                    }
+
+                    env.APP_VERSION = params.APP_VERSION
+                    echo "Deploying Version: ${env.APP_VERSION}"
+                }
+            }
+        }
+
+        stage('Deploy to PROD') {
+            steps {
+                script {
+                    sshagent(credentials: ['docker-server-ssh']) {
+                        sh """
+                        ssh -o StrictHostKeyChecking=no ec2-user@${PROD_SERVER} '
+                        set -e
+
+                        echo "Pulling image..."
+                        docker pull ${DOCKER_IMAGE}:${APP_VERSION}
+
+                        echo "Stopping old container..."
+                        docker stop ${CONTAINER_NAME} || true
+
+                        echo "Removing old container..."
+                        docker rm ${CONTAINER_NAME} || true
+
+                        echo "Starting new container..."
+                        docker run -d -p 8083:8080 --name ${CONTAINER_NAME} ${DOCKER_IMAGE}:${APP_VERSION}
+
+                        echo "Verifying container..."
+                        docker ps | grep ${CONTAINER_NAME} || { echo "Container failed!"; exit 1; }
+                        '
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ PROD Deployment Successful"
+        }
+        failure {
+            echo "❌ PROD Deployment Failed"
+        }
+    }
+}
+
+******************************************************************************************
+IN JENKINS DASHBOARD 
+create 2 separate multibranch pipeline jobs for Application-repo job, Deployment-repo job 
+Inside the application job configure branch source with github add github credentials and repo url so that it will pull all branches from that repo 
+and creates seperate job for each branch.
+After every commit instead of doing scan repo from jenkins job we can configure webhook in github this will automatically trigger the job.
+Configuring webhook in github:
+Application-Repo-->Webhook-->Add Webhook-->Payload URL: http://<jenkinsprivateip:8080/github-webhook/-->Content type:application/json-->
+Events: Select just the push event.
+
+** CONFIGURATION OF CREDENTIALS IN JENKINS SERVER
+ With the help of these credentials jenkins server communicate with those respective servers
+
+1. Manage jenkins > system > add sonarqube > name: sonar-server >
+   URL: http://sonar-serverprivate ip:9000 > save
+   credentials > add secret text > copy paste the sonar-token > 
+   ID : sonar-token (should match the token-name > save
+2. Manage jenkins > credentials > global > add credentials > kind: username with password, 
+   > username: sonyvinny77 > passord: copy paste git-hub token > Id: github-cred > save 
+   (This is used for git cloning)
+3. Manage jenkins > credentials > global > add credentials > kind: secret text
+   (copy paste github token) Id: github-api-creds (this is used for Pull Request)
+4. Manage jenkins > credentials > global > add credentials > kind: username with password,
+   > username: admin(eg) > passord: nexus123 > Id: nexus-cred > save 
+5. Manage jenkins > credentials > global > add credentials > kind: SSH with private key 
+   copy paste the pem keys of dev,qa,pre-prod,prod servers with the help of pem file application 
+   is deployed in respective servers (try to have same pem file for every server)
+
+*********************************************************************************************
+CONFIGURING PATH OF THE TOOLS IN JENKINS-SERVER
+
+ Manage jenkins > global tool configuration > 
+                 add sonarqube-scanner > name: sonar-scanner > path: paste the path of sonar-scanner > save
+                 add JDK > name: JDK-21, path: /usr/lib/jvm/java-21-amazon_corretto.x86_84 > save
+                 add maven > name: maven > path: /opt/maven > save 
+                 add git > name: git > path: /opt/git > save
+************************************************************************************************
+PRE-REQUISTIES:
+1. Launch an EC2 instance name it as Jenkins-Server - Where java,git,maven jenkins should be installed.
+* Jenkins-plugins: Sonarqube-scanner, Git-hub integration plugin, Git-hub branch source plugin SHOULD BE INSTALLED FROM MANAGE JENKINS.
+STEPS FOR INSTALLING TRIVY IN JENKINS SERVER:
+1.Add Trivy Repository---Run below commands in jenkins server:
+sudo tee /etc/yum.repos.d/trivy.repo <<EOF
+[trivy]
+name=Trivy repository
+baseurl=https://aquasecurity.github.io/trivy-repo/rpm/releases/\$basearch/
+gpgcheck=0
+enabled=1
+EOF
+2.Install Trivy:
+sudo yum install trivy -y
+3. Verify Installation:
+trivy --version
+4. Test Trivy Scan:
+trivy image sony9014/myapp:v1.0.7
+This command will show us the vulnerabilities like (HIGH,MEDIUM,CRITICAL,LOW)
+5. I have added trivy scan stage in jenkinsfile so that it will scan the image 
+###################################################################
+2.Launch another instance name it as Sonar-Server - Where Docker should be installed
+We ran sonarqube by creating a docker container: 
+Commands to install docker:
+sudo yum install docker -y
+sudo systemctl enable docker
+sudo systemctl start docker
+sudo usermod -aG docker ec2-user
+newgrp docker
+docker ps
+>> docker run -d --name sonarqube -p 9000:9000 sonarqube-community             #DEFAULT PORT OF SONARQUBE:9000
+By giving the public ip of sonar server we can access it through browser
+>> http://<sonar-public-ip>:9000
+Credentials by default it will be username:admin password:admin later change the default password
+**IN SONAR-SERVER (browser) **
+1. CREATE A PROJECT:
+   projects >> create project >> project name: myproject >> projectkey: myproject-key >> save
+2. GENERATE-TOKEN:
+   go to my account >> security >> Token-name: sonar-token >> token type- usertoken >> generate 
+3. CREATING WEBHOOK 
+  administartion >> configuration >> webhook >> click on create >> name: sonar-hook >> 
+  URL: http://jenkinspublicIP:8080/sonarqube-webhook/ >> save 
+##################################################################################
+3.STEPS FOR INSTALLING NEXUS:
+CREATE AN EC2 INSTANCE FOR NEXUS WITH SSH PORT 22 AND TCP PORT 8081 FOR ACCESSING THROUGH BROWSER
+ON NEXUS SERVER COMMANDS:
+We ran nexus by creating a docker container: 
+Commands to install docker:
+sudo yum install docker -y
+sudo systemctl enable docker
+sudo systemctl start docker
+sudo usermod -aG docker ec2-user
+newgrp docker
+docker ps
+>> docker run -d --name nexus -p 8081:8081 sonatype/nexus3            #DEFAULT PORT OF nexus:8081
+By giving the public ip of nexus server we can access it through browser
+>> http://<nexus-public-ip>:8081
+Default username: admin, passwd: docker exec -it nexus cat /nexus-data/admin.password (to get the password 
+run this command in the nexus-server)
+** CREATE MAVEN REPOSITORY : 
+Settings → Repositories → Create repository
+Create:
+maven2 (hosted)
+Name : my-maven-releases
+Version policy : Release
+Deployment policy : Allow redeploy 
+CLICK ON CREATE REPOSITORY YOU WILL GET A REPOSITORY URL http://<nexus_private_ip>:8081/repository/my-maven-releases/
+In nexus server CONFIGURE MAVEN settings.xml
+GO TO MAVEN DICRECTORY cd ~/.m2
+vi settings.xml
+<settings>
+ <servers>
+   <server>
+     <id>nexus</id>                          # SHOULD MATCH WITH POM.XML ID FROM DISTRIBUTION MANAGEMENT SECTION
+     <username>admin</username>
+     <password>YOUR_NEXUS_PASSWORD</password>            # NEXUS LOGIN PASSWORD WE SHOULD MENTION.MY PASSWORD IS Nexus@123
+   </server>
+ </servers>
+</settings>  
+8. UPDATE pom.xml [ROOT POM.XML WHICH IS INSIDE OF application-repo/pom.xml NOT INSIDE OF SERVER FOLDER OR NOT INSIDE OF WEBAPP FOLDER             
+                   THEY ARE PARENT POM.XML]
+<distributionManagement>
+    <repository>
+        <id>nexus</id>                                                     # SHOULD MATCH WITH SETTINGS.XML ID
+        <name>Nexus</name>                                                       # REPO NAME
+        <url>http://<NEXUS_Public_IP>:8081/repository/my-maven-releases/</url>   # REPO URL 
+    </repository>
+</distributionManagement>
